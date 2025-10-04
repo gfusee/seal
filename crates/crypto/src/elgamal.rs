@@ -14,7 +14,7 @@ pub struct PublicKey<G: GroupElement>(G);
 #[derive(Serialize, Deserialize, Clone)]
 pub struct VerificationKey<G: GroupElement>(G);
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Encryption<G: GroupElement>(pub G, pub G);
 
 pub fn genkey<G: GroupElement, VG: GroupElement<ScalarType = G::ScalarType>, R: AllowedRng>(

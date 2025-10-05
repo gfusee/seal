@@ -33,7 +33,6 @@ pub struct SessionKey {
 
 impl SessionKey {
     pub async fn new<Address, ID, SigError, Sig>(
-        address: Address,
         package_id: ID,
         ttl_min: u16,
         signer: &mut Sig,
@@ -44,7 +43,6 @@ impl SessionKey {
         SessionKeyError: From<SigError>,
         Sig: Signer<Error = SigError>
     {
-        let address: SuiAddress = address.into();
         let package_id: ObjectID = package_id.into();
 
         if ttl_min < MIN_TTL_MIN || ttl_min > MAX_TTL_MAX {
@@ -73,7 +71,7 @@ impl SessionKey {
 
         Ok(
             SessionKey {
-                address,
+                address: signer_address,
                 package_id,
                 creation_time_ms: chrono::Utc::now().timestamp_millis() as u64,
                 ttl_min,

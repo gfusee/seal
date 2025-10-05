@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 async-trait = "0.1.89"
+anyhow = { workspace = true }
 chrono = "0.4.39"
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -16,8 +17,9 @@ bcs = { workspace = true }
 tracing = { workspace = true }
 tokio = { version = "1.46.1", features = ["full"] }
 crypto = { path = "../crypto" }
-sui_sdk = { workspace = true }
-sui_types = { workspace = true }
+sui_sdk = { workspace = true, optional = true }
+sui_types = { workspace = true, optional = true }
+sui_keys = { workspace = true, optional = true }
 shared_crypto = { workspace = true }
 sui-sdk-types = { workspace = true }
 reqwest = { version = "0.11", optional = true }
@@ -29,7 +31,8 @@ rand = { workspace = true }
 moka = { version = "0.12.11", features = ["future"], optional = true }
 
 [features]
-default = ["client", "native-tls"]
+default = ["client", "native-tls", "native-sui-sdk"]
 native-tls = ["reqwest/native-tls"]
 client = ["reqwest", "http"]
 moka-client = ["moka"]
+native-sui-sdk = ["sui_sdk", "sui_types", "sui_keys"]

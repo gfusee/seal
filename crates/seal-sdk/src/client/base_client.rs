@@ -15,22 +15,18 @@ use crypto::{
 };
 use fastcrypto::ed25519::Ed25519KeyPair;
 use fastcrypto::groups::FromTrustedByteArray;
-use fastcrypto::traits::{KeyPair, Signer};
 use futures::future::join_all;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use shared_crypto::intent::{Intent, IntentMessage};
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use sui_sdk::rpc_types::{SuiMoveValue, SuiParsedData};
 use sui_sdk_types::{SimpleSignature, UserSignature};
-use sui_types::base_types::ObjectID;
-use sui_types::crypto::{get_key_pair, Signature, SuiSignature};
-use sui_types::dynamic_field::DynamicFieldName;
-use sui_types::transaction::ProgrammableTransaction;
-use sui_types::TypeTag;
+use sui_types::crypto::{get_key_pair, SuiSignature};
+use crate::client::generic_types::{BCSSerializableProgrammableTransaction, ObjectID};
+use crate::client::signer::Signer;
 
 /// Key server object layout containing object id, name, url, and public key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,11 +40,13 @@ pub struct KeyServerInfo {
 pub type DerivedKeys = (ObjectID, FetchKeyResponse);
 
 #[derive(Clone)]
-pub struct BaseSealClient<KeyServerInfoCache, DerivedKeysCache, Sui, HttpError, Http>
+pub struct BaseSealClient<KeyServerInfoCache, DerivedKeysCache, SuiError, Sui, HttpError, Http>
 where
     KeyServerInfoCache: SealCache<Key = KeyServerInfoCacheKey, Value = KeyServerInfo>,
     DerivedKeysCache: SealCache<Key = DerivedKeyCacheKey, Value = Vec<DerivedKeys>>,
-    Sui: SuiClient,
+    SealClientError: From<SuiError>,
+    SuiError: Send + Sync + Display + 'static,
+    Sui: SuiClient<Error = SuiError>,
     SealClientError: From<HttpError>,
     Http: HttpClient<PostError = HttpError>,
 {
@@ -65,11 +63,13 @@ struct RequestFormat {
     enc_verification_key: Vec<u8>,
 }
 
-impl<KeyServerInfoCache, DerivedKeysCache, Sui, HttpError, Http> BaseSealClient<KeyServerInfoCache, DerivedKeysCache, Sui, HttpError, Http>
+impl<KeyServerInfoCache, DerivedKeysCache, SuiError, Sui, HttpError, Http> BaseSealClient<KeyServerInfoCache, DerivedKeysCache, SuiError, Sui, HttpError, Http>
 where
     KeyServerInfoCache: SealCache<Key = KeyServerInfoCacheKey, Value = KeyServerInfo>,
     DerivedKeysCache: SealCache<Key = DerivedKeyCacheKey, Value = Vec<DerivedKeys>>,
-    Sui: SuiClient,
+    SealClientError: From<SuiError>,
+    SuiError: Send + Sync + Display + 'static,
+    Sui: SuiClient<Error = SuiError>,
     SealClientError: From<HttpError>,
     Http: HttpClient<PostError = HttpError>,
 {
@@ -105,11 +105,11 @@ where
 
         let key_servers = key_servers
             .into_iter()
-            .map(|object_id| sui_sdk_types::ObjectId::from(object_id.into_bytes()))
+            .map(|e| sui_sdk_types::ObjectId::new(e.0))
             .collect();
 
         let result = seal_encrypt(
-            sui_sdk_types::ObjectId::from(package_id.into_bytes()),
+            crypto::ObjectID::new(package_id.0),
             id,
             key_servers,
             &public_keys,
@@ -128,18 +128,26 @@ where
         self.fetch_key_server_info(key_server_ids).await
     }
 
-    pub async fn decrypt_object<T: DeserializeOwned>(
+    pub async fn decrypt_object<T, ID, PTB, Sig>(
         &mut self,
-        package_id: ObjectID,
+        package_id: ID,
         encrypted_object_data: &[u8],
-        approve_transaction_data: ProgrammableTransaction,
-    ) -> Result<T, SealClientError> {
+        approve_transaction_data: PTB,
+        signer: Sig
+    ) -> Result<T, SealClientError>
+    where
+        T: DeserializeOwned,
+        ObjectID: From<ID>,
+        PTB: BCSSerializableProgrammableTransaction,
+        Sig: Signer
+    {
+        let package_id: ObjectID = package_id.into();
         let encrypted_object = bcs::from_bytes::<EncryptedObject>(encrypted_object_data)?;
 
         let service_ids: Vec<ObjectID> = encrypted_object
             .services
             .iter()
-            .map(|(id, _)| ObjectID::new(id.into_inner()))
+            .map(|(id, _)| ObjectID(id.into_inner()))
             .collect();
 
         let key_server_info = self.fetch_key_server_info(service_ids).await?;
@@ -147,7 +155,7 @@ where
             .iter()
             .map(|info| {
                 Ok::<_, SealClientError>((
-                    sui_sdk_types::ObjectId::new(info.object_id.into_bytes()),
+                    crypto::ObjectID::new(info.object_id.0),
                     self.decode_public_key(info)?,
                 ))
             })
@@ -155,10 +163,11 @@ where
             .into_iter()
             .collect::<HashMap<_, _>>();
 
-        let (enc_secret, signed_request) = self.get_signed_request_dummy_wallet(
-            sui_sdk_types::ObjectId::from(package_id.into_bytes()),
-            bcs::to_bytes(&approve_transaction_data)?,
-        )?;
+        let (enc_secret, signed_request) = self.get_signed_request(
+            crypto::ObjectID::from(package_id.0),
+            approve_transaction_data.to_bcs_bytes()?,
+            signer
+        ).await?;
 
         let derived_keys = self
             .fetch_derived_keys(
@@ -168,7 +177,7 @@ where
             )
             .await?
             .into_iter()
-            .map(|derived_key| (sui_sdk_types::ObjectId::new(derived_key.0.into_bytes()), derived_key.1))
+            .map(|derived_key| (crypto::ObjectID::new(derived_key.0.0), derived_key.1))
             .collect::<Vec<_>>();
 
         let encrypted_objects = [encrypted_object];
@@ -197,7 +206,7 @@ where
                 self.key_server_info_cache
                     .try_get_with(
                         cache_key,
-                        self.load_key_server_info(key_server_id)
+                        self.sui_client.get_key_server_info(key_server_id.0)
                     )
                     .await
                     .map_err(unwrap_cache_error)
@@ -210,91 +219,7 @@ where
             .await
             .into_iter()
             .collect::<Result<_, _>>()
-    }
-
-    async fn load_key_server_info(
-        &self,
-        key_server_id: ObjectID,
-    ) -> Result<KeyServerInfo, SealClientError> {
-        let dynamic_field_name = DynamicFieldName {
-            type_: TypeTag::U64,
-            value: Value::String("1".to_string()),
-        };
-
-        let response = self
-            .sui_client
-            .get_dynamic_field_object(key_server_id, dynamic_field_name)
-            .await?;
-
-        let object_data = response.data.ok_or_else(|| {
-            SealClientError::NoObjectDataFromTheSuiRPC {
-                object_id: key_server_id,
-            }
-        })?;
-
-        let content = object_data.content.ok_or_else(|| {
-            SealClientError::NoObjectDataFromTheSuiRPC {
-                object_id: key_server_id,
-            }
-        })?;
-
-        let parsed = match content {
-            SuiParsedData::MoveObject(obj) => obj,
-            _ => {
-                return Err(SealClientError::InvalidObjectDataFromTheSuiRPC {
-                    object_id: key_server_id,
-                })
-            }
-        };
-
-        let error_no_move_field = |field_name: &str| {
-            SealClientError::MissingKeyServerField { field_name: field_name.to_string() }
-        };
-
-        let url_value = parsed.fields
-            .field_value("url")
-            .ok_or_else(|| error_no_move_field("url"))?;
-
-        let name_value = parsed.fields
-            .field_value("name")
-            .ok_or_else(|| error_no_move_field("name"))?;
-
-        let public_key_value = parsed.fields
-            .field_value("pk")
-            .ok_or_else(|| error_no_move_field("pk"))?;
-
-        let (url, name, public_key) = match (url_value, name_value, public_key_value) {
-            (SuiMoveValue::String(url), SuiMoveValue::String(name), SuiMoveValue::Vector(public_key_values)) => {
-                let public_key_bytes = public_key_values
-                    .into_iter()
-                    .map(|value| {
-                        match value {
-                            SuiMoveValue::Number(byte) => {
-                                match u8::try_from(byte) {
-                                    Ok(byte) => Ok(byte),
-                                    Err(_) => Err(SealClientError::InvalidKeyServerDynamicFieldsType { object_id: key_server_id }),
-                                }
-                            },
-                            _ => Err(SealClientError::InvalidKeyServerDynamicFieldsType { object_id: key_server_id }),
-                        }
-                    })
-                    .collect::<Result<Vec<u8>, _>>()?;
-
-                let public_key = hex::encode(&public_key_bytes);
-
-                (url, name, public_key)
-            }
-            _ => return Err(SealClientError::InvalidKeyServerDynamicFieldsType { object_id: key_server_id }),
-        };
-
-        let key_server_info = KeyServerInfo {
-            object_id: key_server_id,
-            name,
-            url,
-            public_key,
-        };
-
-        Ok(key_server_info)
+            .map_err(Into::into)
     }
 
     async fn fetch_derived_keys(
@@ -384,14 +309,16 @@ where
         Ok(IBEPublicKey::from_trusted_byte_array(&array)?)
     }
 
-    fn get_signed_request_dummy_wallet(
+    async fn get_signed_request<Sig>(
         &self,
         package_id: sui_sdk_types::ObjectId,
         approve_transaction_data: Vec<u8>,
-    ) -> Result<(ElGamalSecretKey, FetchKeyRequest), SealClientError> {
+        mut signer: Sig
+    ) -> Result<(ElGamalSecretKey, FetchKeyRequest), SealClientError>
+    where
+        Sig: Signer
+    {
         let eg_keys = genkey(&mut rand::thread_rng());
-
-        let (key_pair_address, key_pair): (_, Ed25519KeyPair) = get_key_pair();
 
         let creation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -399,9 +326,11 @@ where
             .as_millis() as u64;
         let ttl_min = 1u16;
 
+        let signer_public_key = signer.get_public_key()?;
+
         let message_to_sign = signed_message(
             package_id.to_string(),
-            key_pair.public(),
+            &signer_public_key,
             creation_time,
             ttl_min,
         );
@@ -411,11 +340,9 @@ where
             message_to_sign.as_bytes().to_vec(),
         );
 
-        let Signature::Ed25519SuiSignature(personal_message_signature) =
-            Signature::new_secure(&personal_message, &key_pair)
-        else {
-            return Err(SealClientError::CannotSignPersonalMessage { message: message_to_sign });
-        };
+        let personal_message_signature = signer.sign_personal_message(
+            bcs::to_bytes(&personal_message)?
+        ).await?;
 
         let approve_transaction_data_base64 = base64::engine::general_purpose::STANDARD.encode(&approve_transaction_data);
 
@@ -425,22 +352,19 @@ where
             ptb: approve_transaction_data_base64,
             enc_key: eg_keys.1,
             enc_verification_key: eg_keys.2,
-            request_signature: key_pair.sign(&request_to_be_signed),
+            request_signature: signer.sign_bytes(request_to_be_signed).await?,
             certificate: Certificate {
-                user: sui_sdk_types::Address::from(key_pair_address.to_inner()),
-                session_vk: key_pair.public().clone(),
+                user: sui_sdk_types::Address::new(signer.get_sui_address()?.0),
+                session_vk: signer_public_key.clone(),
                 creation_time,
                 ttl_min,
                 signature: UserSignature::Simple(SimpleSignature::Ed25519 {
                     signature: sui_sdk_types::Ed25519Signature::from_bytes(
-                        &personal_message_signature.signature_bytes(),
+                        &personal_message_signature.sig.to_bytes(),
                     )
                         .unwrap(),
                     public_key: sui_sdk_types::Ed25519PublicKey::new(
-                        personal_message_signature
-                            .public_key_bytes()
-                            .try_into()
-                            .unwrap(),
+                        signer_public_key.0.to_bytes()
                     ),
                 }),
                 mvr_name: None,
@@ -466,8 +390,13 @@ where
     }
 }
 
-fn unwrap_cache_error(err: Arc<SealClientError>) -> SealClientError {
+fn unwrap_cache_error<T>(err: Arc<T>) -> SealClientError
+where
+    T: Display,
+    SealClientError: From<T>
+{
     Arc::try_unwrap(err)
+        .map(Into::into)
         .unwrap_or_else(|wrapped_error| {
             SealClientError::CannotUnwrapTypedError {
                 error_message: wrapped_error.to_string(),

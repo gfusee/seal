@@ -4,18 +4,22 @@ use crate::client::error::SealClientError;
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct ObjectID(pub [u8; 32]);
 
-impl<T> From<T> for ObjectID
-where
-    [u8; 32]: From<T>
+impl From<[u8; 32]> for ObjectID
 {
-    fn from(value: T) -> Self {
-        Self(value.into())
+    fn from(value: [u8; 32]) -> Self {
+        Self(value)
     }
 }
 
 impl From<ObjectID> for sui_sdk_types::ObjectId {
     fn from(value: ObjectID) -> Self {
         Self::new(value.0)
+    }
+}
+
+impl From<sui_sdk_types::ObjectId> for ObjectID {
+    fn from(value: sui_sdk_types::ObjectId) -> Self {
+        Self::from(value.into_inner())
     }
 }
 
@@ -26,14 +30,18 @@ impl From<ObjectID> for sui_sdk::types::base_types::ObjectID {
     }
 }
 
+#[cfg(feature = "native-sui-sdk")]
+impl From<sui_sdk::types::base_types::ObjectID> for ObjectID {
+    fn from(value: sui_sdk::types::base_types::ObjectID) -> ObjectID {
+        ObjectID(value.into_bytes())
+    }
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct SuiAddress(pub [u8; 32]);
 
-impl<T> From<T> for SuiAddress
-where
-    [u8; 32]: From<T>
-{
-    fn from(value: T) -> Self {
+impl From<[u8; 32]> for SuiAddress {
+    fn from(value: [u8; 32]) -> Self {
         Self(value.into())
     }
 }
@@ -44,10 +52,23 @@ impl From<SuiAddress> for sui_sdk_types::Address {
     }
 }
 
+impl From<sui_sdk_types::Address> for SuiAddress {
+    fn from(value: sui_sdk_types::Address) -> Self {
+        Self::from(value.into_inner())
+    }
+}
+
 #[cfg(feature = "native-sui-sdk")]
 impl From<SuiAddress> for sui_sdk::types::base_types::SuiAddress {
     fn from(value: SuiAddress) -> Self {
         Self::from(sui_sdk::types::base_types::ObjectID::new(value.0))
+    }
+}
+
+#[cfg(feature = "native-sui-sdk")]
+impl From<sui_sdk::types::base_types::SuiAddress> for SuiAddress {
+    fn from(value: sui_sdk::types::base_types::SuiAddress) -> SuiAddress {
+        SuiAddress(value.to_inner())
     }
 }
 

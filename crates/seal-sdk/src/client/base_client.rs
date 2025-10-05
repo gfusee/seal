@@ -85,18 +85,24 @@ where
         }
     }
 
-    pub async fn encrypt_bytes<ID>(
+    pub async fn encrypt_bytes<ID1, ID2>(
         &mut self,
-        package_id: ID,
+        package_id: ID1,
         id: Vec<u8>,
         threshold: u8,
-        key_servers: Vec<ObjectID>,
+        key_servers: Vec<ID2>,
         data: Vec<u8>,
     ) -> Result<EncryptedObject, SealClientError>
     where
-        ObjectID: From<ID>
+        ObjectID: From<ID1>,
+        ObjectID: From<ID2>,
     {
         let package_id: ObjectID = package_id.into();
+        let key_servers = key_servers
+            .into_iter()
+            .map(ObjectID::from)
+            .collect::<Vec<_>>();
+
         let key_server_info = self.fetch_key_server_info(key_servers.clone()).await?;
         let public_keys_g2 = key_server_info
             .iter()
@@ -107,7 +113,7 @@ where
 
         let key_servers = key_servers
             .into_iter()
-            .map(|e| e.0.into())
+            .map(|e| e.into())
             .collect();
 
         let result = seal_encrypt(

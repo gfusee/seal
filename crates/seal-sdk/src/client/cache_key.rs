@@ -1,4 +1,4 @@
-use sui_types::base_types::ObjectID;
+use crate::client::generic_types::ObjectID;
 
 #[derive(PartialEq, Eq, Hash, Clone)]
 pub struct KeyServerInfoCacheKey {

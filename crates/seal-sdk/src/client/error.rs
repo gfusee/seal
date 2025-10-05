@@ -1,8 +1,8 @@
 use fastcrypto::error::FastCryptoError;
 use http::header::{InvalidHeaderName, InvalidHeaderValue};
-use sui_types::base_types::ObjectID;
-
+use sui_types::signature;
 use thiserror::Error;
+use crate::client::native_sui_sdk::client::sui_client::SuiClientError;
 
 #[derive(Debug, Error)]
 pub enum SealClientError {
@@ -21,12 +21,13 @@ pub enum SealClientError {
     #[error("HEX deserialization error: {0}")]
     JSONDeserialization(#[from] hex::FromHexError),
 
+    #[cfg(all(feature = "client", feature = "native-sui-sdk"))]
+    #[error("Sui client error: {0}")]
+    SuiClient(#[from] SuiClientError),
+
     #[cfg(feature = "reqwest")]
     #[error("Reqwest error: {0}")]
     Reqwest(#[from] ReqwestError),
-
-    #[error("Sui SDK error: {0}")]
-    SuiSdk(#[from] sui_sdk::error::Error),
 
     #[error("Error while fetching derived keys from {url}: HTTP {status} - {response}")]
     ErrorWhileFetchingDerivedKeys {
@@ -41,23 +42,14 @@ pub enum SealClientError {
     #[error("Missing decrypted object")]
     MissingDecryptedObject,
 
-    #[error("No object data from the Sui RPC for object {object_id}")]
-    NoObjectDataFromTheSuiRPC { object_id: ObjectID },
-
-    #[error("Invalid object data from the Sui RPC for object {object_id}")]
-    InvalidObjectDataFromTheSuiRPC { object_id: ObjectID },
-
-    #[error("Missing key server field: {field_name}")]
-    MissingKeyServerField { field_name: String },
-
-    #[error("Invalid dynamic fields type from key server for object {object_id}")]
-    InvalidKeyServerDynamicFieldsType { object_id: ObjectID },
-
     #[error("Invalid public key {public_key}: {reason}")]
     InvalidPublicKey { public_key: String, reason: String },
 
-    #[error("Cannot sign personal message")]
-    CannotSignPersonalMessage { message: String },
+    #[error("Signature error: {message}")]
+    SignatureError { message: String },
+
+    #[error("Unknown error: {0}")]
+    UnknownError(#[from] anyhow::Error),
 }
 
 #[cfg(feature = "reqwest")]

@@ -1,29 +1,13 @@
+use crate::client::base_client::KeyServerInfo;
 use async_trait::async_trait;
-use sui_sdk::error::SuiRpcResult;
-use sui_sdk::rpc_types::SuiObjectResponse;
-use sui_types::base_types::ObjectID;
-use sui_types::dynamic_field::DynamicFieldName;
+use std::fmt::Display;
 
 #[async_trait]
-pub trait SuiClient: Sync {
-    async fn get_dynamic_field_object(
-        &self,
-        parent_object_id: ObjectID,
-        name: DynamicFieldName,
-    ) -> SuiRpcResult<SuiObjectResponse>;
-}
+pub trait SuiClient: Send + Sync {
+    type Error: Display + Send + Sync;
 
-#[async_trait]
-impl SuiClient for sui_sdk::SuiClient {
-    async fn get_dynamic_field_object(
+    async fn get_key_server_info(
         &self,
-        parent_object_id: ObjectID,
-        name: DynamicFieldName,
-    ) -> SuiRpcResult<SuiObjectResponse> {
-        self.read_api()
-            .get_dynamic_field_object(
-                parent_object_id,
-                name,
-            ).await
-    }
+        key_server_id: [u8; 32],
+    ) -> Result<KeyServerInfo, Self::Error>;
 }

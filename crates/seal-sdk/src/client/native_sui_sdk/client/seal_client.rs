@@ -1,23 +1,17 @@
-use crate::client::cache::NoCache;
-use crate::client::cache_key::{DerivedKeyCacheKey, KeyServerInfoCacheKey};
-use crate::client::base_client::{BaseSealClient, DerivedKeys, KeyServerInfo};
-use crate::client::http_client::HttpClient;
-use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
+use reqwest::Client;
 use tokio::sync::Mutex;
+use crate::client::base_client::{BaseSealClient, DerivedKeys, KeyServerInfo};
+use crate::client::cache::NoCache;
+use crate::client::cache_key::{DerivedKeyCacheKey, KeyServerInfoCacheKey};
+use crate::client::http_client::HttpClient;
+use crate::client::sui_client::SuiClient;
 
 pub type SealClient = BaseSealClient<
     NoCache<KeyServerInfoCacheKey, KeyServerInfo>,
     NoCache<DerivedKeyCacheKey, Vec<DerivedKeys>>,
-    sui_sdk::SuiClient,
-    <Client as HttpClient>::PostError,
-    Client
->;
-
-pub type SealClientLeakingCache = BaseSealClient<
-    Arc<Mutex<HashMap<KeyServerInfoCacheKey, KeyServerInfo>>>,
-    Arc<Mutex<HashMap<DerivedKeyCacheKey, Vec<DerivedKeys>>>>,
+    <sui_sdk::SuiClient as SuiClient>::Error,
     sui_sdk::SuiClient,
     <Client as HttpClient>::PostError,
     Client
@@ -35,6 +29,15 @@ impl SealClient {
         )
     }
 }
+
+pub type SealClientLeakingCache = BaseSealClient<
+    Arc<Mutex<HashMap<KeyServerInfoCacheKey, KeyServerInfo>>>,
+    Arc<Mutex<HashMap<DerivedKeyCacheKey, Vec<DerivedKeys>>>>,
+    <sui_sdk::SuiClient as SuiClient>::Error,
+    sui_sdk::SuiClient,
+    <Client as HttpClient>::PostError,
+    Client
+>;
 
 impl SealClientLeakingCache {
     pub fn new(
@@ -56,10 +59,12 @@ pub mod moka {
     use crate::client::base_client::{BaseSealClient, DerivedKeys, KeyServerInfo};
     use crate::client::cache_key::{DerivedKeyCacheKey, KeyServerInfoCacheKey};
     use crate::client::http_client::HttpClient;
+    use crate::client::sui_client::SuiClient;
 
     pub type SealClientMokaCache = BaseSealClient<
         Cache<KeyServerInfoCacheKey, KeyServerInfo>,
         Cache<DerivedKeyCacheKey, Vec<DerivedKeys>>,
+        <sui_sdk::SuiClient as SuiClient>::Error,
         sui_sdk::SuiClient,
         <Client as HttpClient>::PostError,
         Client

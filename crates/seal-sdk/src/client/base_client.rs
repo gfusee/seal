@@ -85,14 +85,18 @@ where
         }
     }
 
-    pub async fn encrypt_bytes(
+    pub async fn encrypt_bytes<ID>(
         &mut self,
-        package_id: ObjectID,
+        package_id: ID,
         id: Vec<u8>,
         threshold: u8,
         key_servers: Vec<ObjectID>,
         data: Vec<u8>,
-    ) -> Result<EncryptedObject, SealClientError> {
+    ) -> Result<EncryptedObject, SealClientError>
+    where
+        ObjectID: From<ID>
+    {
+        let package_id: ObjectID = package_id.into();
         let key_server_info = self.fetch_key_server_info(key_servers.clone()).await?;
         let public_keys_g2 = key_server_info
             .iter()

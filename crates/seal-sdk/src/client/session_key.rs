@@ -57,9 +57,11 @@ impl SessionKey {
         let signer_address = signer.get_sui_address()?;
         let signer_public_key = signer.get_public_key()?;
 
+        let session_key = Ed25519KeyPair::generate(&mut thread_rng());
+
         let message_to_sign = signed_message(
             sui_sdk_types::ObjectId::from(package_id).to_string(),
-            &signer_public_key,
+            &session_key.public(),
             chrono::Utc::now().timestamp_millis() as u64,
             ttl_min,
         );
@@ -74,7 +76,7 @@ impl SessionKey {
                 package_id,
                 creation_time_ms: chrono::Utc::now().timestamp_millis() as u64,
                 ttl_min,
-                session_key: Ed25519KeyPair::generate(&mut thread_rng()),
+                session_key,
                 personal_message_signer_address_and_public_key: (signer_address, signer_public_key),
                 personal_message_signature: signature.sig.to_bytes(),
             }

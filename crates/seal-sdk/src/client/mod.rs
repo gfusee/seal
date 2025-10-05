@@ -12,3 +12,4 @@ pub mod native_sui_sdk;
 mod reqwest;
 pub mod generic_types;
 mod signer;
+mod session_key;

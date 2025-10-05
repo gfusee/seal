@@ -3,15 +3,12 @@ use crate::client::cache_key::{DerivedKeyCacheKey, KeyServerInfoCacheKey};
 use crate::client::error::SealClientError;
 use crate::client::generic_types::{BCSSerializableProgrammableTransaction, ObjectID};
 use crate::client::http_client::HttpClient;
-use crate::client::signer::Signer;
+use crate::client::session_key::SessionKey;
 use crate::client::sui_client::SuiClient;
-use crate::types::{ElGamalPublicKey, ElgamalVerificationKey};
 use crate::{
-    seal_decrypt_all_objects, signed_message, Certificate, ElGamalSecretKey,
+    seal_decrypt_all_objects,
     FetchKeyRequest, FetchKeyResponse, IBEPublicKey,
 };
-use base64::Engine;
-use crypto::elgamal::genkey;
 use crypto::{
     seal_encrypt, EncryptedObject, EncryptionInput, IBEPublicKeys,
 };
@@ -22,8 +19,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-use sui_sdk_types::{SimpleSignature, UserSignature};
 
 /// Key server object layout containing object id, name, url, and public key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,13 +46,6 @@ where
     derived_key_cache: DerivedKeysCache,
     sui_client: Sui,
     http_client: Http,
-}
-
-#[derive(Serialize, Deserialize)]
-struct RequestFormat {
-    ptb: Vec<u8>,
-    enc_key: Vec<u8>,
-    enc_verification_key: Vec<u8>,
 }
 
 impl<KeyServerInfoCache, DerivedKeysCache, SuiError, Sui, HttpError, Http> BaseSealClient<KeyServerInfoCache, DerivedKeysCache, SuiError, Sui, HttpError, Http>
@@ -135,20 +123,16 @@ where
         self.fetch_key_server_info(key_server_ids).await
     }
 
-    pub async fn decrypt_object<T, ID, PTB, Sig>(
+    pub async fn decrypt_object<T, PTB>(
         &self,
-        package_id: ID,
         encrypted_object_data: &[u8],
         approve_transaction_data: PTB,
-        signer: Sig
+        session_key: &SessionKey,
     ) -> Result<T, SealClientError>
     where
         T: DeserializeOwned,
-        ObjectID: From<ID>,
         PTB: BCSSerializableProgrammableTransaction,
-        Sig: Signer
     {
-        let package_id: ObjectID = package_id.into();
         let encrypted_object = bcs::from_bytes::<EncryptedObject>(encrypted_object_data)?;
 
         let service_ids: Vec<ObjectID> = encrypted_object
@@ -170,11 +154,7 @@ where
             .into_iter()
             .collect::<HashMap<_, _>>();
 
-        let (enc_secret, signed_request) = self.get_signed_request(
-            package_id.into(),
-            approve_transaction_data.to_bcs_bytes()?,
-            signer
-        ).await?;
+        let (signed_request, enc_secret) = session_key.get_fetch_key_request(approve_transaction_data.to_bcs_bytes()?)?;
 
         let derived_keys = self
             .fetch_derived_keys(
@@ -314,81 +294,6 @@ where
         })?;
 
         Ok(IBEPublicKey::from_trusted_byte_array(&array)?)
-    }
-
-    async fn get_signed_request<Sig>(
-        &self,
-        package_id: sui_sdk_types::ObjectId,
-        approve_transaction_data: Vec<u8>,
-        mut signer: Sig
-    ) -> Result<(ElGamalSecretKey, FetchKeyRequest), SealClientError>
-    where
-        Sig: Signer
-    {
-        let eg_keys = genkey(&mut rand::thread_rng());
-
-        let creation_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
-        let ttl_min = 1u16;
-
-        let signer_public_key = signer.get_public_key()?;
-
-        let message_to_sign = signed_message(
-            package_id.to_string(),
-            &signer_public_key,
-            creation_time,
-            ttl_min,
-        );
-
-        let personal_message_signature = signer.sign_personal_message(
-            message_to_sign.as_bytes().to_vec()
-        ).await?;
-
-        let approve_transaction_data_base64 = base64::engine::general_purpose::STANDARD.encode(&approve_transaction_data);
-
-        let request_to_be_signed = self.request_to_be_signed(approve_transaction_data, &eg_keys.1, &eg_keys.2)?;
-
-        let request = FetchKeyRequest {
-            ptb: approve_transaction_data_base64,
-            enc_key: eg_keys.1,
-            enc_verification_key: eg_keys.2,
-            request_signature: signer.sign_bytes(request_to_be_signed).await?,
-            certificate: Certificate {
-                user: signer.get_sui_address()?.into(),
-                session_vk: signer_public_key.clone(),
-                creation_time,
-                ttl_min,
-                signature: UserSignature::Simple(SimpleSignature::Ed25519 {
-                    signature: sui_sdk_types::Ed25519Signature::from_bytes(
-                        &personal_message_signature.sig.to_bytes(),
-                    )
-                        .unwrap(),
-                    public_key: sui_sdk_types::Ed25519PublicKey::new(
-                        signer_public_key.0.to_bytes()
-                    ),
-                }),
-                mvr_name: None,
-            },
-        };
-
-        Ok((eg_keys.0, request))
-    }
-
-    fn request_to_be_signed(
-        &self,
-        approve_transaction_data: Vec<u8>,
-        enc_key: &ElGamalPublicKey,
-        enc_verification_key: &ElgamalVerificationKey,
-    ) -> Result<Vec<u8>, SealClientError> {
-        let req = RequestFormat {
-            ptb: approve_transaction_data,
-            enc_key: bcs::to_bytes(enc_key)?,
-            enc_verification_key: bcs::to_bytes(enc_verification_key)?,
-        };
-
-        Ok(bcs::to_bytes(&req)?)
     }
 }
 

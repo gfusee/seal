@@ -1,6 +1,8 @@
-use crate::client::cache::{NoCache, SealCache};
+use crate::client::cache::SealCache;
 use crate::client::cache_key::{DerivedKeyCacheKey, KeyServerInfoCacheKey};
 use crate::client::error::SealClientError;
+use crate::client::http_client::HttpClient;
+use crate::client::sui_client::SuiClient;
 use crate::types::{ElGamalPublicKey, ElgamalVerificationKey};
 use crate::{
     seal_decrypt_all_objects, signed_message, Certificate, ElGamalSecretKey,
@@ -15,7 +17,6 @@ use fastcrypto::ed25519::Ed25519KeyPair;
 use fastcrypto::groups::FromTrustedByteArray;
 use fastcrypto::traits::{KeyPair, Signer};
 use futures::future::join_all;
-use reqwest::{Body, Client};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,14 +25,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sui_sdk::rpc_types::{SuiMoveValue, SuiParsedData};
-use sui_sdk::SuiClient;
 use sui_sdk_types::{SimpleSignature, UserSignature};
 use sui_types::base_types::ObjectID;
 use sui_types::crypto::{get_key_pair, Signature, SuiSignature};
 use sui_types::dynamic_field::DynamicFieldName;
 use sui_types::transaction::ProgrammableTransaction;
 use sui_types::TypeTag;
-use tokio::sync::Mutex;
 
 /// Key server object layout containing object id, name, url, and public key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,26 +43,19 @@ pub struct KeyServerInfo {
 
 pub type DerivedKeys = (ObjectID, FetchKeyResponse);
 
-pub type SealClient = BaseSealClient<
-    NoCache<KeyServerInfoCacheKey, KeyServerInfo>,
-    NoCache<DerivedKeyCacheKey, Vec<DerivedKeys>>,
->;
-
-pub type SealClientLeakingCache = BaseSealClient<
-    Arc<Mutex<HashMap<KeyServerInfoCacheKey, KeyServerInfo>>>,
-    Arc<Mutex<HashMap<DerivedKeyCacheKey, Vec<DerivedKeys>>>>,
->;
-
 #[derive(Clone)]
-pub struct BaseSealClient<KeyServerInfoCache, DerivedKeysCache>
+pub struct BaseSealClient<KeyServerInfoCache, DerivedKeysCache, Sui, HttpError, Http>
 where
     KeyServerInfoCache: SealCache<Key = KeyServerInfoCacheKey, Value = KeyServerInfo>,
     DerivedKeysCache: SealCache<Key = DerivedKeyCacheKey, Value = Vec<DerivedKeys>>,
+    Sui: SuiClient,
+    SealClientError: From<HttpError>,
+    Http: HttpClient<PostError = HttpError>,
 {
     key_server_info_cache: KeyServerInfoCache,
     derived_key_cache: DerivedKeysCache,
-    sui_client: SuiClient,
-    http: Client,
+    sui_client: Sui,
+    http_client: Http,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -73,45 +65,25 @@ struct RequestFormat {
     enc_verification_key: Vec<u8>,
 }
 
-impl SealClient {
-    pub fn new_no_cache(
-        sui_client: SuiClient
-    ) -> SealClient {
-        BaseSealClient::new_custom_caches(
-            ().into(),
-            ().into(),
-            sui_client
-        )
-    }
-}
-
-impl SealClientLeakingCache {
-    pub fn new_no_cache(
-        sui_client: SuiClient
-    ) -> SealClientLeakingCache {
-        BaseSealClient::new_custom_caches(
-            Default::default(),
-            Default::default(),
-            sui_client
-        )
-    }
-}
-
-impl<KeyServerInfoCache, DerivedKeysCache> BaseSealClient<KeyServerInfoCache, DerivedKeysCache>
+impl<KeyServerInfoCache, DerivedKeysCache, Sui, HttpError, Http> BaseSealClient<KeyServerInfoCache, DerivedKeysCache, Sui, HttpError, Http>
 where
     KeyServerInfoCache: SealCache<Key = KeyServerInfoCacheKey, Value = KeyServerInfo>,
     DerivedKeysCache: SealCache<Key = DerivedKeyCacheKey, Value = Vec<DerivedKeys>>,
+    Sui: SuiClient,
+    SealClientError: From<HttpError>,
+    Http: HttpClient<PostError = HttpError>,
 {
-    pub fn new_custom_caches(
+    pub fn new_custom(
         key_server_info_cache: KeyServerInfoCache,
         derived_key_cache: DerivedKeysCache,
-        sui_client: SuiClient
+        sui_client: Sui,
+        http_client: Http
     ) -> Self {
         BaseSealClient {
             key_server_info_cache,
             derived_key_cache,
             sui_client,
-            http: Client::new(),
+            http_client,
         }
     }
 
@@ -251,7 +223,6 @@ where
 
         let response = self
             .sui_client
-            .read_api()
             .get_dynamic_field_object(key_server_id, dynamic_field_name)
             .await?;
 
@@ -346,33 +317,31 @@ where
         let cache_future = async {
             let mut seal_responses: Vec<DerivedKeys> = Vec::new();
             for server in key_servers_info.iter() {
+                let mut headers = HashMap::new();
+
+                headers.insert("Client-Sdk-Type".to_string(), "rust".to_string());
+                headers.insert("Client-Sdk-Version".to_string(), "1.0.0".to_string());
+                headers.insert("Content-Type".to_string(), "application/json".to_string());
+
                 let url = format!("{}/v1/fetch_key", server.url);
                 let response = self
-                    .http
-                    .post(&url)
-                    .header("Client-Sdk-Type", "rust")
-                    .header("Client-Sdk-Version", "1.0.0")
-                    .header("Content-Type", "application/json")
-                    .body(Body::from(request_json.clone()))
-                    .send()
+                    .http_client
+                    .post(
+                        &url,
+                        headers,
+                        request_json.clone()
+                    )
                     .await?;
 
-                let response_status = response.status();
-                let response = response.text()
-                    .await
-                    .ok();
-
-                if !response_status.is_success() || response.is_none() {
+                if !response.is_success() {
                     return Err(SealClientError::ErrorWhileFetchingDerivedKeys {
                         url,
-                        status: response_status.as_u16(),
-                        response
+                        status: response.status,
+                        response: response.text
                     });
                 }
 
-                let response = response.unwrap();
-
-                let response: FetchKeyResponse = serde_json::from_str(&response)?;
+                let response: FetchKeyResponse = serde_json::from_str(&response.text)?;
 
                 seal_responses.push((server.object_id, response));
 

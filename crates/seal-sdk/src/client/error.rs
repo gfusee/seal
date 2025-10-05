@@ -1,4 +1,5 @@
 use fastcrypto::error::FastCryptoError;
+use http::header::{InvalidHeaderName, InvalidHeaderValue};
 use sui_types::base_types::ObjectID;
 
 use thiserror::Error;
@@ -20,17 +21,18 @@ pub enum SealClientError {
     #[error("HEX deserialization error: {0}")]
     JSONDeserialization(#[from] hex::FromHexError),
 
+    #[cfg(feature = "reqwest")]
     #[error("Reqwest error: {0}")]
-    Reqwest(#[from] reqwest::Error),
+    Reqwest(#[from] ReqwestError),
 
     #[error("Sui SDK error: {0}")]
     SuiSdk(#[from] sui_sdk::error::Error),
 
-    #[error("Error while fetching derived keys from {url}: HTTP {status} - {response:?}")]
+    #[error("Error while fetching derived keys from {url}: HTTP {status} - {response}")]
     ErrorWhileFetchingDerivedKeys {
         url: String,
         status: u16,
-        response: Option<String>,
+        response: String,
     },
 
     #[error("Insufficient keys: received {received}, but threshold is {threshold}")]
@@ -56,4 +58,15 @@ pub enum SealClientError {
 
     #[error("Cannot sign personal message")]
     CannotSignPersonalMessage { message: String },
+}
+
+#[cfg(feature = "reqwest")]
+#[derive(Debug, Error)]
+pub enum ReqwestError {
+    #[error("A reqwest error occurred: {0}")]
+    Reqwest(#[from] reqwest::Error),
+    #[error("Unable to convert http headers: InvalidHeaderValue")]
+    InvalidHeaderValue(#[from] InvalidHeaderValue),
+    #[error("Unable to convert http headers: InvalidHeaderName")]
+    InvalidHeaderName(#[from] InvalidHeaderName),
 }

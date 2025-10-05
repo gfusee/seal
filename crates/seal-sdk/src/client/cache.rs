@@ -54,6 +54,7 @@ where
     type Key = Key;
     type Value = Value;
 
+    // Simple implementation that doesn't perform any kind of request coalescing
     async fn try_get_with<Fut, Error>(&self, key: Self::Key, init: Fut) -> Result<Self::Value, Arc<Error>>
     where
         Fut: Future<Output = Result<Self::Value, Error>> + Send,
@@ -63,7 +64,7 @@ where
             let cache = self.lock().await;
             cache.get(&key).cloned()
         };
-        
+
         if let Some(value) = cached_value {
             Ok(value.clone())
         } else {
@@ -82,6 +83,32 @@ where
                     Err(Arc::new(err))
                 }
             }
+        }
+    }
+}
+
+#[cfg(feature = "moka")]
+mod moka {
+    use std::hash::Hash;
+    use std::sync::Arc;
+    use async_trait::async_trait;
+    use crate::client::cache::SealCache;
+
+    #[async_trait]
+    impl<Key, Value> SealCache for moka::future::Cache<Key, Value>
+    where
+        Key: Eq + Hash + Send + Sync + 'static,
+        Value: Clone + Send + Sync + 'static,
+    {
+        type Key = Key;
+        type Value = Value;
+
+        async fn try_get_with<Fut, Error>(&self, key: Self::Key, init: Fut) -> Result<Self::Value, Arc<Error>>
+        where
+            Fut: Future<Output=Result<Self::Value, Error>> + Send,
+            Error: Send + Sync + 'static,
+        {
+            moka::future::Cache::try_get_with(self, key, init).await
         }
     }
 }

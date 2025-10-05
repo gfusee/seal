@@ -1,8 +1,7 @@
+use crate::client::native_sui_sdk::client::sui_client::SuiClientError;
 use fastcrypto::error::FastCryptoError;
 use http::header::{InvalidHeaderName, InvalidHeaderValue};
-use sui_types::signature;
 use thiserror::Error;
-use crate::client::native_sui_sdk::client::sui_client::SuiClientError;
 
 #[derive(Debug, Error)]
 pub enum SealClientError {

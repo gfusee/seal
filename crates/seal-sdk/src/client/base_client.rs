@@ -1,7 +1,9 @@
 use crate::client::cache::SealCache;
 use crate::client::cache_key::{DerivedKeyCacheKey, KeyServerInfoCacheKey};
 use crate::client::error::SealClientError;
+use crate::client::generic_types::{BCSSerializableProgrammableTransaction, ObjectID};
 use crate::client::http_client::HttpClient;
+use crate::client::signer::Signer;
 use crate::client::sui_client::SuiClient;
 use crate::types::{ElGamalPublicKey, ElgamalVerificationKey};
 use crate::{
@@ -13,7 +15,6 @@ use crypto::elgamal::genkey;
 use crypto::{
     seal_encrypt, EncryptedObject, EncryptionInput, IBEPublicKeys,
 };
-use fastcrypto::ed25519::Ed25519KeyPair;
 use fastcrypto::groups::FromTrustedByteArray;
 use futures::future::join_all;
 use serde::de::DeserializeOwned;
@@ -24,9 +25,6 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sui_sdk_types::{SimpleSignature, UserSignature};
-use sui_types::crypto::{get_key_pair, SuiSignature};
-use crate::client::generic_types::{BCSSerializableProgrammableTransaction, ObjectID};
-use crate::client::signer::Signer;
 
 /// Key server object layout containing object id, name, url, and public key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,11 +103,11 @@ where
 
         let key_servers = key_servers
             .into_iter()
-            .map(|e| sui_sdk_types::ObjectId::new(e.0))
+            .map(|e| e.0.into())
             .collect();
 
         let result = seal_encrypt(
-            crypto::ObjectID::new(package_id.0),
+            package_id.0.into(),
             id,
             key_servers,
             &public_keys,
@@ -155,7 +153,7 @@ where
             .iter()
             .map(|info| {
                 Ok::<_, SealClientError>((
-                    crypto::ObjectID::new(info.object_id.0),
+                    info.object_id.into(),
                     self.decode_public_key(info)?,
                 ))
             })
@@ -164,7 +162,7 @@ where
             .collect::<HashMap<_, _>>();
 
         let (enc_secret, signed_request) = self.get_signed_request(
-            crypto::ObjectID::from(package_id.0),
+            package_id.into(),
             approve_transaction_data.to_bcs_bytes()?,
             signer
         ).await?;
@@ -177,7 +175,7 @@ where
             )
             .await?
             .into_iter()
-            .map(|derived_key| (crypto::ObjectID::new(derived_key.0.0), derived_key.1))
+            .map(|derived_key| (derived_key.0.into(), derived_key.1))
             .collect::<Vec<_>>();
 
         let encrypted_objects = [encrypted_object];
@@ -354,7 +352,7 @@ where
             enc_verification_key: eg_keys.2,
             request_signature: signer.sign_bytes(request_to_be_signed).await?,
             certificate: Certificate {
-                user: sui_sdk_types::Address::new(signer.get_sui_address()?.0),
+                user: signer.get_sui_address()?.into(),
                 session_vk: signer_public_key.clone(),
                 creation_time,
                 ttl_min,

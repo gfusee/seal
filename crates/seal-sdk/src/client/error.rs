@@ -1,4 +1,3 @@
-use crate::client::native_sui_sdk::client::sui_client::SuiClientError;
 use fastcrypto::error::FastCryptoError;
 use http::header::{InvalidHeaderName, InvalidHeaderValue};
 use thiserror::Error;
@@ -11,18 +10,21 @@ pub enum SealClientError {
     #[error("FastCrypto error: {0}")]
     FastCrypto(#[from] FastCryptoError),
 
-    #[error("BCS serialization error: {0}")]
-    BCSSerialization(#[from] bcs::Error),
+    #[error("BCS error: {0}")]
+    BCS(#[from] bcs::Error),
 
     #[error("JSON serialization error: {0}")]
     JSONSerialization(#[from] serde_json::Error),
 
     #[error("HEX deserialization error: {0}")]
-    JSONDeserialization(#[from] hex::FromHexError),
+    HEXDeserialization(#[from] hex::FromHexError),
+
+    #[error("Session key error error: {0}")]
+    SessionKey(#[from] SessionKeyError),
 
     #[cfg(all(feature = "client", feature = "native-sui-sdk"))]
     #[error("Sui client error: {0}")]
-    SuiClient(#[from] SuiClientError),
+    SuiClient(#[from] crate::client::native_sui_sdk::client::sui_client::SuiClientError),
 
     #[cfg(feature = "reqwest")]
     #[error("Reqwest error: {0}")]
@@ -44,9 +46,6 @@ pub enum SealClientError {
     #[error("Invalid public key {public_key}: {reason}")]
     InvalidPublicKey { public_key: String, reason: String },
 
-    #[error("Signature error: {message}")]
-    SignatureError { message: String },
-
     #[error("Unknown error: {0}")]
     UnknownError(#[from] anyhow::Error),
 }
@@ -60,4 +59,20 @@ pub enum ReqwestError {
     InvalidHeaderValue(#[from] InvalidHeaderValue),
     #[error("Unable to convert http headers: InvalidHeaderName")]
     InvalidHeaderName(#[from] InvalidHeaderName),
+}
+
+#[derive(Debug, Error)]
+pub enum SessionKeyError {
+    #[error("ttl_min should be a value between {min} and {max}, received {received}")]
+    InvalidTTLMin { min: u16, max: u16, received: u16 },
+
+    #[error("BCS error: {0}")]
+    BCS(#[from] bcs::Error),
+
+    #[error("FastCrypto error: {0}")]
+    FastCrypto(#[from] FastCryptoError),
+
+    #[cfg(feature = "native-sui-sdk")]
+    #[error("Wallet context error: {0}")]
+    WalletContext(#[from] crate::client::native_sui_sdk::signer::wallet_context::WalletContextError),
 }

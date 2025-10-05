@@ -16,7 +16,7 @@ impl Signer for sui_sdk::wallet_context::WalletContext {
         message: Vec<u8>
     ) -> Result<Ed25519Signature, SealClientError> {
         let generic_address = self.get_sui_address()?;
-        let address = sui_types::base_types::SuiAddress::from(sui_types::base_types::ObjectID::new(generic_address.0));
+        let address = generic_address.into();
         let identity = KeyIdentity::Address(address);
         let keystore = self.get_keystore_by_identity(&identity)?;
 
@@ -37,7 +37,7 @@ impl Signer for sui_sdk::wallet_context::WalletContext {
 
     async fn sign_bytes(&mut self, bytes: Vec<u8>) -> Result<Ed25519Signature, SealClientError> {
         let generic_address = self.get_sui_address()?;
-        let address = sui_types::base_types::SuiAddress::from(sui_types::base_types::ObjectID::new(generic_address.0));
+        let address = generic_address.into();
         let identity = KeyIdentity::Address(address);
         let keystore = self.get_keystore_by_identity(&identity)?;
 
@@ -57,7 +57,7 @@ impl Signer for sui_sdk::wallet_context::WalletContext {
 
     fn get_public_key(&mut self) -> Result<Ed25519PublicKey, SealClientError> {
         let generic_address = self.get_sui_address()?;
-        let address = sui_types::base_types::SuiAddress::from(sui_types::base_types::ObjectID::new(generic_address.0));
+        let address = generic_address.into();
         let identity = KeyIdentity::Address(address);
         let keystore = self.get_keystore_by_identity(&identity)?;
         let public_key = match keystore {

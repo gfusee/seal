@@ -1,8 +1,7 @@
-use async_trait::async_trait;
-use fastcrypto::ed25519::{Ed25519PublicKey, Ed25519Signature};
-use shared_crypto::intent::Intent;
 use crate::client::error::SealClientError;
 use crate::client::generic_types::SuiAddress;
+use async_trait::async_trait;
+use fastcrypto::ed25519::{Ed25519PublicKey, Ed25519Signature};
 
 #[async_trait]
 pub trait Signer {

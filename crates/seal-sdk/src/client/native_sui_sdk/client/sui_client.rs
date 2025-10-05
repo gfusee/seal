@@ -5,7 +5,6 @@ use sui_types::dynamic_field::DynamicFieldName;
 use sui_types::TypeTag;
 use thiserror::Error;
 use crate::client::base_client::KeyServerInfo;
-use crate::client::error::SealClientError;
 use crate::client::generic_types::ObjectID;
 use crate::client::sui_client::SuiClient;
 

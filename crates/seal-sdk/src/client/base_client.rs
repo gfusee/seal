@@ -19,7 +19,6 @@ use fastcrypto::groups::FromTrustedByteArray;
 use futures::future::join_all;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use shared_crypto::intent::{Intent, IntentMessage};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -343,13 +342,8 @@ where
             ttl_min,
         );
 
-        let personal_message = IntentMessage::new(
-            Intent::personal_message(),
-            message_to_sign.as_bytes().to_vec(),
-        );
-
         let personal_message_signature = signer.sign_personal_message(
-            bcs::to_bytes(&personal_message)?
+            message_to_sign.as_bytes().to_vec()
         ).await?;
 
         let approve_transaction_data_base64 = base64::engine::general_purpose::STANDARD.encode(&approve_transaction_data);

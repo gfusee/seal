@@ -9,7 +9,7 @@ pub mod http_client;
 pub mod native_sui_sdk;
 
 #[cfg(feature = "reqwest")]
-mod reqwest;
+pub mod reqwest;
 pub mod generic_types;
-mod signer;
-mod session_key;
+pub mod signer;
+pub mod session_key;

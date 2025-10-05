@@ -74,15 +74,24 @@ impl SuiClient for sui_sdk::SuiClient {
             SuiClientError::MissingKeyServerField { field_name: field_name.to_string() }
         };
 
-        let url_value = parsed.fields
+        let value_field = parsed.fields
+            .field_value("value")
+            .ok_or_else(|| error_no_move_field("value"))?;
+
+        let value_struct = match value_field {
+            SuiMoveValue::Struct(value_struct) => value_struct,
+            _ => return Err(SuiClientError::InvalidKeyServerDynamicFieldsType { object_id: key_server_id }),
+        };
+
+        let url_value = value_struct
             .field_value("url")
             .ok_or_else(|| error_no_move_field("url"))?;
 
-        let name_value = parsed.fields
+        let name_value = value_struct
             .field_value("name")
             .ok_or_else(|| error_no_move_field("name"))?;
 
-        let public_key_value = parsed.fields
+        let public_key_value = value_struct
             .field_value("pk")
             .ok_or_else(|| error_no_move_field("pk"))?;
 

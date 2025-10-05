@@ -134,7 +134,7 @@ impl SessionKey {
 
         Certificate {
             user: self.personal_message_signer_address_and_public_key.0.into(),
-            session_vk: self.personal_message_signer_address_and_public_key.1.clone(),
+            session_vk: self.session_key.public().clone(),
             creation_time: self.creation_time_ms,
             ttl_min: self.ttl_min,
             signature: UserSignature::Simple(SimpleSignature::Ed25519 {

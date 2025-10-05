@@ -17,9 +17,19 @@ pub trait SealCache: Send + Sync {
         Error: Send + Sync + 'static;
 }
 
+#[derive(Copy, Clone, Debug)]
 pub struct NoCache<Key, Value> {
     _phantom_key: PhantomData<Key>,
     _phantom_value: PhantomData<Value>,
+}
+
+impl<Key, Value> Default for NoCache<Key, Value> {
+    fn default() -> Self {
+        NoCache {
+            _phantom_key: PhantomData,
+            _phantom_value: PhantomData,
+        }
+    }
 }
 
 impl<Key, Value> From<()> for NoCache<Key, Value> {

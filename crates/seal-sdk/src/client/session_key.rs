@@ -32,13 +32,12 @@ pub struct SessionKey {
 }
 
 impl SessionKey {
-    pub async fn new<Address, ID, SigError, Sig>(
+    pub async fn new<ID, SigError, Sig>(
         package_id: ID,
         ttl_min: u16,
         signer: &mut Sig,
     ) -> Result<SessionKey, SessionKeyError>
     where
-        SuiAddress: From<Address>,
         ObjectID: From<ID>,
         SessionKeyError: From<SigError>,
         Sig: Signer<Error = SigError>

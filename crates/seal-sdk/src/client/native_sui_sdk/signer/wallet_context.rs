@@ -4,7 +4,7 @@ use fastcrypto::traits::ToFromBytes;
 use shared_crypto::intent::Intent;
 use sui_keys::key_identity::KeyIdentity;
 use sui_keys::keystore::{AccountKeystore, Keystore};
-use sui_types::crypto::Signature;
+use sui_types::crypto::{Signature, SuiSignature};
 use crate::client::error::SealClientError;
 use crate::client::generic_types::SuiAddress;
 use crate::client::signer::Signer;
@@ -32,7 +32,7 @@ impl Signer for sui_sdk::wallet_context::WalletContext {
             return Err(SealClientError::SignatureError { message: hex::encode(message) });
         };
 
-        Ok(Ed25519Signature::from_bytes(signature.as_bytes())?)
+        Ok(Ed25519Signature::from_bytes(signature.signature_bytes())?)
     }
 
     async fn sign_bytes(&mut self, bytes: Vec<u8>) -> Result<Ed25519Signature, SealClientError> {
@@ -52,7 +52,7 @@ impl Signer for sui_sdk::wallet_context::WalletContext {
             return Err(SealClientError::SignatureError { message: hex::encode(bytes) });
         };
 
-        Ok(Ed25519Signature::from_bytes(signature.as_bytes())?)
+        Ok(Ed25519Signature::from_bytes(signature.signature_bytes())?)
     }
 
     fn get_public_key(&mut self) -> Result<Ed25519PublicKey, SealClientError> {

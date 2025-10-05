@@ -86,7 +86,7 @@ where
     }
 
     pub async fn encrypt_bytes<ID1, ID2>(
-        &mut self,
+        &self,
         package_id: ID1,
         id: Vec<u8>,
         threshold: u8,
@@ -130,14 +130,14 @@ where
 
     #[allow(dead_code)]
     pub async fn key_server_info(
-        &mut self,
+        &self,
         key_server_ids: Vec<ObjectID>,
     ) -> Result<Vec<KeyServerInfo>, SealClientError> {
         self.fetch_key_server_info(key_server_ids).await
     }
 
     pub async fn decrypt_object<T, ID, PTB, Sig>(
-        &mut self,
+        &self,
         package_id: ID,
         encrypted_object_data: &[u8],
         approve_transaction_data: PTB,
@@ -231,7 +231,7 @@ where
     }
 
     async fn fetch_derived_keys(
-        &mut self,
+        &self,
         request: FetchKeyRequest,
         key_servers_info: Vec<KeyServerInfo>,
         threshold: u8,

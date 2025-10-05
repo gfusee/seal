@@ -6,4 +6,4 @@ pub mod sui_client;
 pub mod http_client;
 
 #[cfg(feature = "client")]
-mod seal_client;
+pub mod seal_client;

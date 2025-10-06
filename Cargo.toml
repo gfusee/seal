@@ -34,7 +34,6 @@ test-cluster = { git = "https://github.com/mystenlabs/sui", rev = "22642cf", pac
 
 # this matches the sdk version used by mvr-types dep: https://github.com/MystenLabs/mvr
 sui-sdk-types = { git = "https://github.com/mystenlabs/sui-rust-sdk", features = ["serde"], rev = "86a9e06" }
-sui-transaction-builder = { git = "https://github.com/mystenlabs/sui-rust-sdk", rev = "86a9e06" }
 
 [profile.release]
 panic = 'abort'

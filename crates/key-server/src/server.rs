@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
+use key_server::master_keys::MasterKeys;
+use key_server::{app, get_server_options_from_env};
 use mysten_service::serve;
 use sui_sdk::SuiClient;
 use tracing::error;
-use key_server::{app, get_server_options_from_env};
-use key_server::master_keys::MasterKeys;
 
 #[tokio::main]
 async fn main() -> Result<()> {

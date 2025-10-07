@@ -219,7 +219,7 @@ async fn get_object<T, Client>(
 ) -> Result<T, InternalError>
 where
     T: for<'a> Deserialize<'a>,
-    Client: RpcClient
+    Client: RpcClient,
 {
     bcs::from_bytes(
         sui_rpc_client

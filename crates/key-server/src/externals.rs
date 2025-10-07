@@ -118,7 +118,7 @@ pub(crate) async fn get_latest_checkpoint_timestamp<Client: RpcClient>(
 }
 
 pub(crate) async fn get_reference_gas_price<Client: RpcClient>(
-    sui_rpc_client: SuiRpcClient<Client>
+    sui_rpc_client: SuiRpcClient<Client>,
 ) -> SuiRpcResult<u64> {
     let rgp = sui_rpc_client
         .get_reference_gas_price()

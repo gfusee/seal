@@ -20,7 +20,13 @@ use seal_sdk::{seal_decrypt_all_objects, signed_message};
 use shared_crypto::intent::{Intent, IntentMessage};
 use std::str::FromStr;
 use sui_sdk::error::SuiRpcResult;
-use sui_sdk::rpc_types::{Checkpoint, CheckpointId, DryRunTransactionBlockResponse, OwnedObjectRef, SuiExecutionStatus, SuiGasData, SuiObjectData, SuiObjectDataOptions, SuiObjectRef, SuiObjectResponse, SuiProgrammableTransactionBlock, SuiRawData, SuiRawMovePackage, SuiTransactionBlockData, SuiTransactionBlockDataV1, SuiTransactionBlockEffects, SuiTransactionBlockEffectsV1, SuiTransactionBlockKind, ZkLoginIntentScope, ZkLoginVerifyResult};
+use sui_sdk::rpc_types::{
+    Checkpoint, CheckpointId, DryRunTransactionBlockResponse, OwnedObjectRef, SuiExecutionStatus,
+    SuiGasData, SuiObjectData, SuiObjectDataOptions, SuiObjectRef, SuiObjectResponse,
+    SuiProgrammableTransactionBlock, SuiRawData, SuiRawMovePackage, SuiTransactionBlockData,
+    SuiTransactionBlockDataV1, SuiTransactionBlockEffects, SuiTransactionBlockEffectsV1,
+    SuiTransactionBlockKind, ZkLoginIntentScope, ZkLoginVerifyResult,
+};
 use sui_sdk::SuiClient;
 use sui_types::base_types::{ObjectID, ObjectType, SuiAddress};
 use sui_types::crypto::Signature;
@@ -47,95 +53,92 @@ struct MockSuiClient;
 impl RpcClient for MockSuiClient {
     async fn new_from_builder<Fut>(_build: Fut) -> SuiRpcResult<Self>
     where
-        Fut: Future<Output=SuiRpcResult<SuiClient>> + Send
+        Fut: Future<Output = SuiRpcResult<SuiClient>> + Send,
     {
         SuiRpcResult::Ok(MockSuiClient)
     }
 
-    async fn dry_run_transaction_block(&self, _tx: TransactionData) -> SuiRpcResult<DryRunTransactionBlockResponse> {
-        SuiRpcResult::Ok(
-            DryRunTransactionBlockResponse {
-                effects: SuiTransactionBlockEffects::V1(
-                    SuiTransactionBlockEffectsV1 {
-                        status: SuiExecutionStatus::Success,
-                        executed_epoch: 0,
-                        gas_used: Default::default(),
-                        modified_at_versions: vec![],
-                        shared_objects: vec![],
-                        transaction_digest: Default::default(),
-                        created: vec![],
-                        mutated: vec![],
-                        unwrapped: vec![],
-                        deleted: vec![],
-                        unwrapped_then_deleted: vec![],
-                        wrapped: vec![],
-                        accumulator_events: vec![],
-                        gas_object: OwnedObjectRef {
-                            owner: Owner::Immutable,
-                            reference: SuiObjectRef {
-                                object_id: SUI_CLOCK_OBJECT_ID,
-                                version: Default::default(),
-                                digest: ObjectDigest::new(Default::default()),
-                            },
-                        },
-                        events_digest: None,
-                        dependencies: vec![],
-                        abort_error: None,
-                    }
+    async fn dry_run_transaction_block(
+        &self,
+        _tx: TransactionData,
+    ) -> SuiRpcResult<DryRunTransactionBlockResponse> {
+        SuiRpcResult::Ok(DryRunTransactionBlockResponse {
+            effects: SuiTransactionBlockEffects::V1(SuiTransactionBlockEffectsV1 {
+                status: SuiExecutionStatus::Success,
+                executed_epoch: 0,
+                gas_used: Default::default(),
+                modified_at_versions: vec![],
+                shared_objects: vec![],
+                transaction_digest: Default::default(),
+                created: vec![],
+                mutated: vec![],
+                unwrapped: vec![],
+                deleted: vec![],
+                unwrapped_then_deleted: vec![],
+                wrapped: vec![],
+                accumulator_events: vec![],
+                gas_object: OwnedObjectRef {
+                    owner: Owner::Immutable,
+                    reference: SuiObjectRef {
+                        object_id: SUI_CLOCK_OBJECT_ID,
+                        version: Default::default(),
+                        digest: ObjectDigest::new(Default::default()),
+                    },
+                },
+                events_digest: None,
+                dependencies: vec![],
+                abort_error: None,
+            }),
+            events: Default::default(),
+            object_changes: vec![],
+            balance_changes: vec![],
+            input: SuiTransactionBlockData::V1(SuiTransactionBlockDataV1 {
+                transaction: SuiTransactionBlockKind::ProgrammableTransaction(
+                    SuiProgrammableTransactionBlock {
+                        inputs: vec![],
+                        commands: vec![],
+                    },
                 ),
-                events: Default::default(),
-                object_changes: vec![],
-                balance_changes: vec![],
-                input: SuiTransactionBlockData::V1(
-                    SuiTransactionBlockDataV1 {
-                        transaction: SuiTransactionBlockKind::ProgrammableTransaction(
-                            SuiProgrammableTransactionBlock {
-                                inputs: vec![],
-                                commands: vec![],
-                            }
-                        ),
-                        sender: Default::default(),
-                        gas_data: SuiGasData {
-                            payment: vec![],
-                            owner: Default::default(),
-                            price: 0,
-                            budget: 0,
-                        },
-                    }
-                ),
-                execution_error_source: None,
-                suggested_gas_price: None,
-            }
-        )
+                sender: Default::default(),
+                gas_data: SuiGasData {
+                    payment: vec![],
+                    owner: Default::default(),
+                    price: 0,
+                    budget: 0,
+                },
+            }),
+            execution_error_source: None,
+            suggested_gas_price: None,
+        })
     }
 
-    async fn get_object_with_options(&self, object_id: ObjectID, _options: SuiObjectDataOptions) -> SuiRpcResult<SuiObjectResponse> {
-        let response = if object_id == ObjectID::from_hex_literal(FIRST_PACKAGE_ID).unwrap() || object_id == ObjectID::from_hex_literal(SECOND_PACKAGE_ID).unwrap() {
+    async fn get_object_with_options(
+        &self,
+        object_id: ObjectID,
+        _options: SuiObjectDataOptions,
+    ) -> SuiRpcResult<SuiObjectResponse> {
+        let response = if object_id == ObjectID::from_hex_literal(FIRST_PACKAGE_ID).unwrap()
+            || object_id == ObjectID::from_hex_literal(SECOND_PACKAGE_ID).unwrap()
+        {
             SuiObjectResponse::new(
-                Some(
-                    SuiObjectData {
-                        object_id,
+                Some(SuiObjectData {
+                    object_id,
+                    version: OBJECT_START_VERSION,
+                    digest: ObjectDigest::new(Default::default()),
+                    type_: Some(ObjectType::Package),
+                    owner: None,
+                    previous_transaction: None,
+                    storage_rebate: None,
+                    display: None,
+                    content: None,
+                    bcs: Some(SuiRawData::Package(SuiRawMovePackage {
+                        id: object_id,
                         version: OBJECT_START_VERSION,
-                        digest: ObjectDigest::new(Default::default()),
-                        type_: Some(ObjectType::Package),
-                        owner: None,
-                        previous_transaction: None,
-                        storage_rebate: None,
-                        display: None,
-                        content: None,
-                        bcs: Some(
-                            SuiRawData::Package(
-                                SuiRawMovePackage {
-                                    id: object_id,
-                                    version: OBJECT_START_VERSION,
-                                    module_map: Default::default(),
-                                    type_origin_table: vec![],
-                                    linkage_table: Default::default(),
-                                }
-                            )
-                        ),
-                    }
-                ),
+                        module_map: Default::default(),
+                        type_origin_table: vec![],
+                        linkage_table: Default::default(),
+                    })),
+                }),
                 None,
             )
         } else {
@@ -145,7 +148,9 @@ impl RpcClient for MockSuiClient {
         SuiRpcResult::Ok(response)
     }
 
-    async fn get_latest_checkpoint_sequence_number(&self) -> SuiRpcResult<CheckpointSequenceNumber> {
+    async fn get_latest_checkpoint_sequence_number(
+        &self,
+    ) -> SuiRpcResult<CheckpointSequenceNumber> {
         todo!()
     }
 
@@ -153,7 +158,11 @@ impl RpcClient for MockSuiClient {
         todo!()
     }
 
-    async fn get_dynamic_field_object(&self, _parent_object_id: ObjectID, _name: DynamicFieldName) -> SuiRpcResult<SuiObjectResponse> {
+    async fn get_dynamic_field_object(
+        &self,
+        _parent_object_id: ObjectID,
+        _name: DynamicFieldName,
+    ) -> SuiRpcResult<SuiObjectResponse> {
         todo!()
     }
 
@@ -161,7 +170,13 @@ impl RpcClient for MockSuiClient {
         todo!()
     }
 
-    async fn verify_zklogin_signature(&self, _bytes: String, _signature: String, _intent_scope: ZkLoginIntentScope, _address: SuiAddress) -> SuiRpcResult<ZkLoginVerifyResult> {
+    async fn verify_zklogin_signature(
+        &self,
+        _bytes: String,
+        _signature: String,
+        _intent_scope: ZkLoginIntentScope,
+        _address: SuiAddress,
+    ) -> SuiRpcResult<ZkLoginVerifyResult> {
         todo!()
     }
 }
@@ -172,20 +187,17 @@ async fn encrypt_and_decrypt_with_mock_server() -> Result<(), anyhow::Error> {
 
     let options = KeyServerOptions::new_open_server_with_default_values(
         Network::Devnet,
-        key_server_object_id
+        key_server_object_id,
     );
     let master_keys = MasterKeys::load(&options.server_mode, MASTER_KEY)?;
 
-    let (server, _, _) = get_server::<MockSuiClient>(
-        options,
-        master_keys,
-    )
+    let (server, _, _) = get_server::<MockSuiClient>(options, master_keys)
         .await
         .unwrap();
 
-
     let server_public_key_bytes = hex::decode(PUBLIC_KEY.strip_prefix("0x").unwrap()).unwrap();
-    let server_public_key_g2 = G2Element::from_byte_array(&server_public_key_bytes.try_into().unwrap()).unwrap();
+    let server_public_key_g2 =
+        G2Element::from_byte_array(&server_public_key_bytes.try_into().unwrap()).unwrap();
 
     let server_public_keys = IBEPublicKeys::BonehFranklinBLS12381(vec![server_public_key_g2]);
     let package_id = ObjectID::from_hex_literal(FIRST_PACKAGE_ID).unwrap();
@@ -195,17 +207,23 @@ async fn encrypt_and_decrypt_with_mock_server() -> Result<(), anyhow::Error> {
     let (encrypted_object, _) = seal_encrypt(
         sui_sdk_types::ObjectId::from(package_id.into_bytes()),
         id.clone(),
-        vec![sui_sdk_types::ObjectId::from(key_server_object_id.into_bytes())],
+        vec![sui_sdk_types::ObjectId::from(
+            key_server_object_id.into_bytes(),
+        )],
         &server_public_keys,
         1,
-        EncryptionInput::Aes256Gcm { data: data.clone(), aad: None }
-    ).unwrap();
+        EncryptionInput::Aes256Gcm {
+            data: data.clone(),
+            aad: None,
+        },
+    )
+    .unwrap();
 
     let user_secret_key = Ed25519PrivateKey::from_bytes(&[
         16, 38, 58, 130, 194, 133, 180, 117, 252, 32, 106, 49, 97, 22, 170, 130, 33, 59, 81, 63,
         132, 11, 246, 227, 58, 130, 18, 208, 130, 124, 49, 12,
     ])
-        .unwrap();
+    .unwrap();
     let keypair = Ed25519KeyPair::from(user_secret_key);
     let user =
         SuiAddress::from_str("0xb743cafeb5da4914cef0cf0a32400c9adfedc5cdb64209f9e740e56d23065100")
@@ -244,9 +262,7 @@ async fn encrypt_and_decrypt_with_mock_server() -> Result<(), anyhow::Error> {
         "my_module".parse().unwrap(),
         "seal_approve".parse().unwrap(),
         vec![],
-        vec![
-            id_arg
-        ]
+        vec![id_arg],
     );
 
     let ptb = ptb_builder.finish();
@@ -270,23 +286,26 @@ async fn encrypt_and_decrypt_with_mock_server() -> Result<(), anyhow::Error> {
         None,
         "1",
         1,
-        None
+        None,
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
 
-    let sui_types_sdk_key_server_object_id = sui_sdk_types::ObjectId::from(key_server_object_id.into_bytes());
+    let sui_types_sdk_key_server_object_id =
+        sui_sdk_types::ObjectId::from(key_server_object_id.into_bytes());
 
     let decrypted = seal_decrypt_all_objects(
         &enc_secret,
         &[(sui_types_sdk_key_server_object_id, fetch_keys_response)],
         &[encrypted_object],
-        &[(sui_types_sdk_key_server_object_id, server_public_key_g2)].into_iter().collect(),
+        &[(sui_types_sdk_key_server_object_id, server_public_key_g2)]
+            .into_iter()
+            .collect(),
     )
-        .unwrap()
-        .into_iter()
-        .next()
-        .unwrap();
+    .unwrap()
+    .into_iter()
+    .next()
+    .unwrap();
 
     assert_eq!(decrypted, data);
 
@@ -299,19 +318,17 @@ async fn encrypt_and_decrypt_wrong_id_with_mock_server() -> Result<(), anyhow::E
 
     let options = KeyServerOptions::new_open_server_with_default_values(
         Network::Devnet,
-        key_server_object_id
+        key_server_object_id,
     );
     let master_keys = MasterKeys::load(&options.server_mode, MASTER_KEY)?;
 
-    let (server, _, _) = get_server::<MockSuiClient>(
-        options,
-        master_keys,
-    )
+    let (server, _, _) = get_server::<MockSuiClient>(options, master_keys)
         .await
         .unwrap();
 
     let server_public_key_bytes = hex::decode(PUBLIC_KEY.strip_prefix("0x").unwrap()).unwrap();
-    let server_public_key_g2 = G2Element::from_byte_array(&server_public_key_bytes.try_into().unwrap()).unwrap();
+    let server_public_key_g2 =
+        G2Element::from_byte_array(&server_public_key_bytes.try_into().unwrap()).unwrap();
 
     let server_public_keys = IBEPublicKeys::BonehFranklinBLS12381(vec![server_public_key_g2]);
     let package_id = ObjectID::from_hex_literal(FIRST_PACKAGE_ID).unwrap();
@@ -321,17 +338,23 @@ async fn encrypt_and_decrypt_wrong_id_with_mock_server() -> Result<(), anyhow::E
     let (encrypted_object, _) = seal_encrypt(
         sui_sdk_types::ObjectId::from(package_id.into_bytes()),
         id.clone(),
-        vec![sui_sdk_types::ObjectId::from(key_server_object_id.into_bytes())],
+        vec![sui_sdk_types::ObjectId::from(
+            key_server_object_id.into_bytes(),
+        )],
         &server_public_keys,
         1,
-        EncryptionInput::Aes256Gcm { data: data.clone(), aad: None }
-    ).unwrap();
+        EncryptionInput::Aes256Gcm {
+            data: data.clone(),
+            aad: None,
+        },
+    )
+    .unwrap();
 
     let user_secret_key = Ed25519PrivateKey::from_bytes(&[
         16, 38, 58, 130, 194, 133, 180, 117, 252, 32, 106, 49, 97, 22, 170, 130, 33, 59, 81, 63,
         132, 11, 246, 227, 58, 130, 18, 208, 130, 124, 49, 12,
     ])
-        .unwrap();
+    .unwrap();
     let keypair = Ed25519KeyPair::from(user_secret_key);
     let user =
         SuiAddress::from_str("0xb743cafeb5da4914cef0cf0a32400c9adfedc5cdb64209f9e740e56d23065100")
@@ -370,9 +393,7 @@ async fn encrypt_and_decrypt_wrong_id_with_mock_server() -> Result<(), anyhow::E
         "my_module".parse().unwrap(),
         "seal_approve".parse().unwrap(),
         vec![],
-        vec![
-            id_arg
-        ]
+        vec![id_arg],
     );
 
     let ptb = ptb_builder.finish();
@@ -396,23 +417,25 @@ async fn encrypt_and_decrypt_wrong_id_with_mock_server() -> Result<(), anyhow::E
         None,
         "1",
         1,
-        None
+        None,
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
 
-    let sui_types_sdk_key_server_object_id = sui_sdk_types::ObjectId::from(key_server_object_id.into_bytes());
+    let sui_types_sdk_key_server_object_id =
+        sui_sdk_types::ObjectId::from(key_server_object_id.into_bytes());
 
     let decrypted = seal_decrypt_all_objects(
         &enc_secret,
         &[(sui_types_sdk_key_server_object_id, fetch_keys_response)],
         &[encrypted_object],
-        &[(sui_types_sdk_key_server_object_id, server_public_key_g2)].into_iter().collect(),
+        &[(sui_types_sdk_key_server_object_id, server_public_key_g2)]
+            .into_iter()
+            .collect(),
     );
 
-    match decrypted {
-        Ok(_) => bail!("Should not succeed"),
-        Err(_) => {}
+    if decrypted.is_ok() {
+        bail!("Should not succeed")
     }
 
     Ok(())
@@ -424,19 +447,17 @@ async fn encrypt_and_decrypt_wrong_package_id_with_mock_server() -> Result<(), a
 
     let options = KeyServerOptions::new_open_server_with_default_values(
         Network::Devnet,
-        key_server_object_id
+        key_server_object_id,
     );
     let master_keys = MasterKeys::load(&options.server_mode, MASTER_KEY)?;
 
-    let (server, _, _) = get_server::<MockSuiClient>(
-        options,
-        master_keys
-    )
+    let (server, _, _) = get_server::<MockSuiClient>(options, master_keys)
         .await
         .unwrap();
 
     let server_public_key_bytes = hex::decode(PUBLIC_KEY.strip_prefix("0x").unwrap()).unwrap();
-    let server_public_key_g2 = G2Element::from_byte_array(&server_public_key_bytes.try_into().unwrap()).unwrap();
+    let server_public_key_g2 =
+        G2Element::from_byte_array(&server_public_key_bytes.try_into().unwrap()).unwrap();
 
     let server_public_keys = IBEPublicKeys::BonehFranklinBLS12381(vec![server_public_key_g2]);
     let package_id = ObjectID::from_hex_literal(FIRST_PACKAGE_ID).unwrap();
@@ -446,17 +467,23 @@ async fn encrypt_and_decrypt_wrong_package_id_with_mock_server() -> Result<(), a
     let (encrypted_object, _) = seal_encrypt(
         sui_sdk_types::ObjectId::from(package_id.into_bytes()),
         id.clone(),
-        vec![sui_sdk_types::ObjectId::from(key_server_object_id.into_bytes())],
+        vec![sui_sdk_types::ObjectId::from(
+            key_server_object_id.into_bytes(),
+        )],
         &server_public_keys,
         1,
-        EncryptionInput::Aes256Gcm { data: data.clone(), aad: None }
-    ).unwrap();
+        EncryptionInput::Aes256Gcm {
+            data: data.clone(),
+            aad: None,
+        },
+    )
+    .unwrap();
 
     let user_secret_key = Ed25519PrivateKey::from_bytes(&[
         16, 38, 58, 130, 194, 133, 180, 117, 252, 32, 106, 49, 97, 22, 170, 130, 33, 59, 81, 63,
         132, 11, 246, 227, 58, 130, 18, 208, 130, 124, 49, 12,
     ])
-        .unwrap();
+    .unwrap();
     let keypair = Ed25519KeyPair::from(user_secret_key);
     let user =
         SuiAddress::from_str("0xb743cafeb5da4914cef0cf0a32400c9adfedc5cdb64209f9e740e56d23065100")
@@ -498,9 +525,7 @@ async fn encrypt_and_decrypt_wrong_package_id_with_mock_server() -> Result<(), a
         "my_module".parse().unwrap(),
         "seal_approve".parse().unwrap(),
         vec![],
-        vec![
-            id_arg
-        ]
+        vec![id_arg],
     );
 
     let ptb = ptb_builder.finish();
@@ -524,23 +549,25 @@ async fn encrypt_and_decrypt_wrong_package_id_with_mock_server() -> Result<(), a
         None,
         "1",
         1,
-        None
+        None,
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
 
-    let sui_types_sdk_key_server_object_id = sui_sdk_types::ObjectId::from(key_server_object_id.into_bytes());
+    let sui_types_sdk_key_server_object_id =
+        sui_sdk_types::ObjectId::from(key_server_object_id.into_bytes());
 
     let decrypted = seal_decrypt_all_objects(
         &enc_secret,
         &[(sui_types_sdk_key_server_object_id, fetch_keys_response)],
         &[encrypted_object],
-        &[(sui_types_sdk_key_server_object_id, server_public_key_g2)].into_iter().collect(),
+        &[(sui_types_sdk_key_server_object_id, server_public_key_g2)]
+            .into_iter()
+            .collect(),
     );
 
-    match decrypted {
-        Ok(_) => bail!("Should not succeed"),
-        Err(_) => {}
+    if decrypted.is_ok() {
+        bail!("Should not succeed")
     }
 
     Ok(())
@@ -552,14 +579,11 @@ async fn encrypt_and_decrypt_invalid_signature_with_mock_server() -> Result<(), 
 
     let options = KeyServerOptions::new_open_server_with_default_values(
         Network::Devnet,
-        key_server_object_id
+        key_server_object_id,
     );
     let master_keys = MasterKeys::load(&options.server_mode, MASTER_KEY)?;
 
-    let (server, _, _) = get_server::<MockSuiClient>(
-        options,
-        master_keys,
-    )
+    let (server, _, _) = get_server::<MockSuiClient>(options, master_keys)
         .await
         .unwrap();
 
@@ -570,7 +594,7 @@ async fn encrypt_and_decrypt_invalid_signature_with_mock_server() -> Result<(), 
         16, 38, 58, 130, 194, 133, 180, 117, 252, 32, 106, 49, 97, 22, 170, 130, 33, 59, 81, 63,
         132, 11, 246, 227, 58, 130, 18, 208, 130, 124, 49, 12,
     ])
-        .unwrap();
+    .unwrap();
     let keypair = Ed25519KeyPair::from(user_secret_key);
     let user =
         SuiAddress::from_str("0xb743cafeb5da4914cef0cf0a32400c9adfedc5cdb64209f9e740e56d23065100")
@@ -603,9 +627,7 @@ async fn encrypt_and_decrypt_invalid_signature_with_mock_server() -> Result<(), 
         "my_module".parse().unwrap(),
         "seal_approve".parse().unwrap(),
         vec![],
-        vec![
-            id_arg
-        ]
+        vec![id_arg],
     );
 
     let ptb = ptb_builder.finish();
@@ -628,13 +650,13 @@ async fn encrypt_and_decrypt_invalid_signature_with_mock_server() -> Result<(), 
         None,
         "1",
         1,
-        None
+        None,
     )
-        .await;
+    .await;
 
     match fetch_keys_response_result {
         Ok(_) => bail!("Should not succeed"),
-        Err(InternalError::InvalidSignature) => {},
+        Err(InternalError::InvalidSignature) => {}
         Err(error) => bail!("Invalid error: {:?}", error),
     }
 

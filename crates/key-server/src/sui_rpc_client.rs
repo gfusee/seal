@@ -1,11 +1,14 @@
 // Copyright (c), Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use crate::{key_server_options::RetryConfig, metrics::Metrics};
 use async_trait::async_trait;
 use fastcrypto::encoding::{Base64, Encoding};
 use fastcrypto::traits::ToFromBytes;
 use shared_crypto::intent::{Intent, IntentMessage, PersonalMessage};
+use std::sync::Arc;
+use sui_sdk::error::Error;
+use sui_sdk::rpc_types::{ZkLoginIntentScope, ZkLoginVerifyResult};
 use sui_sdk::{
     error::SuiRpcResult,
     rpc_types::{
@@ -14,15 +17,12 @@ use sui_sdk::{
     },
     SuiClient,
 };
-use sui_sdk::error::Error;
-use sui_sdk::rpc_types::{ZkLoginIntentScope, ZkLoginVerifyResult};
 use sui_types::base_types::{ObjectID, SuiAddress};
-use sui_types::{dynamic_field::DynamicFieldName, transaction::TransactionData};
 use sui_types::messages_checkpoint::CheckpointSequenceNumber;
+use sui_types::signature::AuthenticatorTrait;
 use sui_types::signature::{GenericSignature, VerifyParams};
 use sui_types::signature_verification::VerifiedDigestCache;
-use sui_types::signature::AuthenticatorTrait;
-use crate::{key_server_options::RetryConfig, metrics::Metrics};
+use sui_types::{dynamic_field::DynamicFieldName, transaction::TransactionData};
 
 /// Trait for determining if an error is retriable
 pub trait RetriableError {
@@ -125,12 +125,10 @@ where
 
 #[async_trait]
 pub trait RpcClient: Clone + Send + Sync + 'static {
-    async fn new_from_builder<Fut>(
-        build: Fut
-    ) -> SuiRpcResult<Self>
+    async fn new_from_builder<Fut>(build: Fut) -> SuiRpcResult<Self>
     where
         Fut: Future<Output = SuiRpcResult<SuiClient>> + Send;
-    
+
     async fn dry_run_transaction_block(
         &self,
         tx: TransactionData,
@@ -142,9 +140,8 @@ pub trait RpcClient: Clone + Send + Sync + 'static {
         options: SuiObjectDataOptions,
     ) -> SuiRpcResult<SuiObjectResponse>;
 
-    async fn get_latest_checkpoint_sequence_number(
-        &self,
-    ) -> SuiRpcResult<CheckpointSequenceNumber>;
+    async fn get_latest_checkpoint_sequence_number(&self)
+        -> SuiRpcResult<CheckpointSequenceNumber>;
 
     async fn get_checkpoint(&self, id: CheckpointId) -> SuiRpcResult<Checkpoint>;
 
@@ -167,49 +164,54 @@ pub trait RpcClient: Clone + Send + Sync + 'static {
 
 #[async_trait]
 impl RpcClient for SuiClient {
-    async fn new_from_builder<Fut>(
-        build: Fut
-    ) -> SuiRpcResult<Self>
+    async fn new_from_builder<Fut>(build: Fut) -> SuiRpcResult<Self>
     where
         Fut: Future<Output = SuiRpcResult<SuiClient>> + Send,
     {
         build.await
     }
-    
-    async fn dry_run_transaction_block(&self, tx: TransactionData) -> SuiRpcResult<DryRunTransactionBlockResponse> {
-        self.read_api()
-            .dry_run_transaction_block(tx)
-            .await
+
+    async fn dry_run_transaction_block(
+        &self,
+        tx: TransactionData,
+    ) -> SuiRpcResult<DryRunTransactionBlockResponse> {
+        self.read_api().dry_run_transaction_block(tx).await
     }
 
-    async fn get_object_with_options(&self, object_id: ObjectID, options: SuiObjectDataOptions) -> SuiRpcResult<SuiObjectResponse> {
+    async fn get_object_with_options(
+        &self,
+        object_id: ObjectID,
+        options: SuiObjectDataOptions,
+    ) -> SuiRpcResult<SuiObjectResponse> {
         self.read_api()
             .get_object_with_options(object_id, options)
             .await
     }
 
-    async fn get_latest_checkpoint_sequence_number(&self) -> SuiRpcResult<CheckpointSequenceNumber> {
+    async fn get_latest_checkpoint_sequence_number(
+        &self,
+    ) -> SuiRpcResult<CheckpointSequenceNumber> {
         self.read_api()
             .get_latest_checkpoint_sequence_number()
             .await
     }
 
     async fn get_checkpoint(&self, id: CheckpointId) -> SuiRpcResult<Checkpoint> {
-        self.read_api()
-            .get_checkpoint(id)
-            .await
+        self.read_api().get_checkpoint(id).await
     }
 
-    async fn get_dynamic_field_object(&self, parent_object_id: ObjectID, name: DynamicFieldName) -> SuiRpcResult<SuiObjectResponse> {
+    async fn get_dynamic_field_object(
+        &self,
+        parent_object_id: ObjectID,
+        name: DynamicFieldName,
+    ) -> SuiRpcResult<SuiObjectResponse> {
         self.read_api()
             .get_dynamic_field_object(parent_object_id, name)
             .await
     }
 
     async fn get_reference_gas_price(&self) -> SuiRpcResult<u64> {
-        self.read_api()
-            .get_reference_gas_price()
-            .await
+        self.read_api().get_reference_gas_price().await
     }
 
     async fn verify_zklogin_signature(
@@ -220,12 +222,7 @@ impl RpcClient for SuiClient {
         address: SuiAddress,
     ) -> SuiRpcResult<ZkLoginVerifyResult> {
         self.read_api()
-            .verify_zklogin_signature(
-                bytes,
-                signature,
-                intent_scope,
-                address,
-            )
+            .verify_zklogin_signature(bytes, signature, intent_scope, address)
             .await
     }
 }
@@ -319,11 +316,7 @@ impl<T: RpcClient> SuiRpcClient<T> {
             &self.rpc_retry_config,
             "get_checkpoint",
             self.metrics.clone(),
-            || async {
-                self.sui_client
-                    .get_checkpoint(checkpoint_id)
-                    .await
-            },
+            || async { self.sui_client.get_checkpoint(checkpoint_id).await },
         )
         .await
     }

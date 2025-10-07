@@ -31,17 +31,13 @@ pub enum MasterKeys {
 }
 
 impl MasterKeys {
-    pub fn load_from_env(
-        server_mode: &ServerMode,
-    ) -> anyhow::Result<Self> {
-        let master_keys_hex_string = env::var(MASTER_KEY_ENV_VAR).map_err(|_| anyhow!("Environment variable {} must be set", MASTER_KEY_ENV_VAR))?;
+    pub fn load_from_env(server_mode: &ServerMode) -> anyhow::Result<Self> {
+        let master_keys_hex_string = env::var(MASTER_KEY_ENV_VAR)
+            .map_err(|_| anyhow!("Environment variable {} must be set", MASTER_KEY_ENV_VAR))?;
 
         Self::load(server_mode, &master_keys_hex_string)
     }
-    pub fn load(
-        server_mode: &ServerMode,
-        master_key_hex_string: &str
-    ) -> anyhow::Result<Self> {
+    pub fn load(server_mode: &ServerMode, master_key_hex_string: &str) -> anyhow::Result<Self> {
         info!("Loading keys from env variables");
         match &server_mode {
             ServerMode::Open { .. } => {
@@ -56,14 +52,17 @@ impl MasterKeys {
             ServerMode::Permissioned { client_configs } => {
                 let mut pkg_id_to_key = HashMap::new();
                 let mut key_server_oid_to_key = HashMap::new();
-                let seed = decode_byte_array::<DefaultEncoding, SEED_LENGTH>(master_key_hex_string)?;
+                let seed =
+                    decode_byte_array::<DefaultEncoding, SEED_LENGTH>(master_key_hex_string)?;
                 for config in client_configs {
                     let master_key = match &config.client_master_key {
                         ClientKeyType::Derived { derivation_index } => {
                             ibe::derive_master_key(&seed, *derivation_index)
                         }
                         ClientKeyType::Imported { env_var } => {
-                            let env = env::var(env_var).map_err(|_| anyhow!("Environment variable {} must be set", env_var))?;
+                            let env = env::var(env_var).map_err(|_| {
+                                anyhow!("Environment variable {} must be set", env_var)
+                            })?;
 
                             decode_master_key::<DefaultEncoding>(&env)?
                         }

@@ -10,10 +10,12 @@ use crate::metrics_push::create_push_client;
 use crate::mvr::mvr_forward_resolution;
 use crate::periodic_updater::spawn_periodic_updater;
 use crate::signed_message::signed_request;
+use crate::sui_rpc_client::{verify_personal_message_signature, RpcClient};
 use crate::time::checked_duration_since;
 use crate::time::from_mins;
 use crate::time::{duration_since_as_f64, saturating_duration_since};
 use crate::types::{MasterKeyPOP, Network};
+use anyhow::Context;
 use axum::extract::{Query, Request};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::middleware::{from_fn_with_state, map_response, Next};
@@ -40,6 +42,7 @@ use mysten_service::get_mysten_service;
 use mysten_service::metrics::start_prometheus_server;
 use mysten_service::package_name;
 use mysten_service::package_version;
+use prometheus::Registry;
 use rand::thread_rng;
 use seal_sdk::types::{DecryptionKey, ElGamalPublicKey, ElgamalVerificationKey, KeyId};
 use seal_sdk::{signed_message, FetchKeyResponse};
@@ -50,8 +53,6 @@ use std::collections::HashMap;
 use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use anyhow::Context;
-use prometheus::Registry;
 use sui_rpc_client::SuiRpcClient;
 use sui_sdk::error::Error;
 use sui_sdk::rpc_types::{SuiExecutionStatus, SuiTransactionBlockEffectsAPI};
@@ -66,7 +67,6 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{debug, error, info, warn};
 use valid_ptb::ValidPtb;
-use crate::sui_rpc_client::{verify_personal_message_signature, RpcClient};
 
 pub mod cache;
 pub mod errors;
@@ -162,10 +162,7 @@ impl<Client: RpcClient> Server<Client> {
         }
     }
 
-    pub fn get_pop(
-        &self,
-        service_id: ObjectID
-    ) -> Result<MasterKeyPOP, InternalError> {
+    pub fn get_pop(&self, service_id: ObjectID) -> Result<MasterKeyPOP, InternalError> {
         self.key_server_oid_to_pop
             .get(&service_id)
             .copied()
@@ -228,14 +225,14 @@ impl<Client: RpcClient> Server<Client> {
             cert.user,
             Some(self.sui_rpc_client.sui_client().clone()),
         )
-            .await
-            .tap_err(|e| {
-                debug!(
+        .await
+        .tap_err(|e| {
+            debug!(
                 "Signature verification failed: {:?} (req_id: {:?})",
                 e, req_id
             );
-            })
-            .map_err(|_| InternalError::InvalidSignature)?;
+        })
+        .map_err(|_| InternalError::InvalidSignature)?;
 
         // Check session signature
         let signed_msg = signed_request(ptb, enc_key, enc_verification_key);
@@ -346,7 +343,7 @@ impl<Client: RpcClient> Server<Client> {
             call_with_duration(metrics.map(|m| &m.fetch_pkg_ids_duration), || async {
                 externals::fetch_first_pkg_id(&valid_ptb.pkg_id(), &self.sui_rpc_client).await
             })
-                .await?;
+            .await?;
 
         // Make sure that the package is supported.
         self.master_keys.has_key_for_package(&first_pkg_id)?;
@@ -359,7 +356,7 @@ impl<Client: RpcClient> Server<Client> {
             first_pkg_id,
             req_id,
         )
-            .await?;
+        .await?;
 
         // Check all conditions
         self.check_signature(
@@ -371,13 +368,13 @@ impl<Client: RpcClient> Server<Client> {
             mvr_name.unwrap_or(first_pkg_id.to_hex_uncompressed()),
             req_id,
         )
-            .await?;
+        .await?;
 
         call_with_duration(metrics.map(|m| &m.check_policy_duration), || async {
             self.check_policy(certificate.user, valid_ptb, gas_price, req_id, metrics)
                 .await
         })
-            .await?;
+        .await?;
 
         // return the full id with the first package id as prefix
         Ok((first_pkg_id, valid_ptb.full_ids(&first_pkg_id)))
@@ -438,7 +435,7 @@ impl<Client: RpcClient> Server<Client> {
             }),
             metrics.map(|m| status_callback(&m.get_checkpoint_timestamp_status)),
         )
-            .await
+        .await
     }
 
     /// Spawns a thread that fetches RGP and sends it to a [Receiver] once per `update_interval`.
@@ -456,7 +453,7 @@ impl<Client: RpcClient> Server<Client> {
             None::<fn(Duration)>,
             metrics.map(|m| status_callback(&m.get_reference_gas_price_status)),
         )
-            .await
+        .await
     }
 
     /// Spawn a metrics push background jobs that push metrics to seal-proxy
@@ -503,17 +500,18 @@ pub async fn fetch_key<Client: RpcClient>(
     metrics: Option<&Metrics>,
 ) -> Result<FetchKeyResponse, InternalError> {
     // Report the number of id's in the request to the metrics.
-    let check_request_result = server.check_request(
-        &valid_ptb,
-        &payload.enc_key,
-        &payload.enc_verification_key,
-        &payload.request_signature,
-        &payload.certificate,
-        gas_price,
-        metrics,
-        req_id,
-        payload.certificate.mvr_name.clone(),
-    )
+    let check_request_result = server
+        .check_request(
+            &valid_ptb,
+            &payload.enc_key,
+            &payload.enc_verification_key,
+            &payload.request_signature,
+            &payload.certificate,
+            gas_price,
+            metrics,
+            req_id,
+            payload.certificate.mvr_name.clone(),
+        )
         .await;
 
     let request_info = json!({ "user": payload.certificate.user, "package_id": valid_ptb.pkg_id(), "req_id": req_id, "sdk_version": sdk_version });
@@ -521,20 +519,16 @@ pub async fn fetch_key<Client: RpcClient>(
         Ok((first_pkg_id, full_ids)) => {
             info!("Valid request: {request_info}");
 
-            let response = server.create_response(
-                first_pkg_id,
-                &full_ids,
-                &payload.enc_key
-            );
+            let response = server.create_response(first_pkg_id, &full_ids, &payload.enc_key);
 
             Ok(response)
-        },
+        }
         Err(InternalError::Failure(s)) => {
             warn!("Check request failed with debug message '{s}': {request_info}");
 
             Err(InternalError::Failure(s))
-        },
-        Err(error) => Err(error)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -562,8 +556,9 @@ async fn handle_fetch_key_internal<Client: RpcClient>(
         req_id,
         sdk_version,
         app_state.reference_gas_price(),
-        Some(&app_state.metrics)
-    ).await
+        Some(&app_state.metrics),
+    )
+    .await
 }
 
 async fn handle_fetch_key<Client: RpcClient>(
@@ -589,9 +584,7 @@ async fn handle_fetch_key<Client: RpcClient>(
     handle_fetch_key_internal(&app_state, &payload, req_id, sdk_version)
         .await
         .tap_err(|e| app_state.metrics.observe_error(e.as_str()))
-        .map(|response| {
-            Json(response)
-        })
+        .map(Json)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -613,9 +606,7 @@ async fn handle_get_service<Client: RpcClient>(
             ObjectID::from_hex_literal(id).map_err(|_| InternalError::InvalidServiceId)
         })?;
 
-    let pop = app_state
-        .server
-        .get_pop(service_id)?;
+    let pop = app_state.server.get_pop(service_id)?;
 
     Ok(Json(GetServiceResponse { service_id, pop }))
 }
@@ -718,7 +709,7 @@ fn uptime_metric(version: &str) -> Box<dyn prometheus::core::Collector> {
         uptime,
         &[version],
     )
-        .unwrap();
+    .unwrap();
 
     Box::new(metric)
 }
@@ -795,7 +786,7 @@ async fn start_server_background_tasks<Client: RpcClient>(
 
 pub async fn app<Client: RpcClient>(
     options: KeyServerOptions,
-    master_keys: MasterKeys
+    master_keys: MasterKeys,
 ) -> anyhow::Result<(JoinHandle<anyhow::Result<()>>, Router)> {
     let (server, metrics, registry) = get_server(options, master_keys).await?;
 
@@ -838,14 +829,14 @@ pub async fn app<Client: RpcClient>(
 
 pub async fn get_server<Client: RpcClient>(
     options: KeyServerOptions,
-    master_keys: MasterKeys
+    master_keys: MasterKeys,
 ) -> anyhow::Result<(Arc<Server<Client>>, Arc<Metrics>, Registry)> {
     info!("Setting up metrics");
     let registry = start_prometheus_server(SocketAddr::new(
         IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
         options.metrics_host_port,
     ))
-        .default_registry();
+    .default_registry();
 
     // Tracks the uptime of the server.
     let registry_clone = registry.clone();
@@ -864,12 +855,10 @@ pub async fn get_server<Client: RpcClient>(
         Client::new_from_builder(
             SuiClientBuilder::default()
                 .request_timeout(options.rpc_config.timeout)
-                .build(&options.network.node_url())
+                .build(&options.network.node_url()),
         )
-            .await
-            .expect(
-                "SuiClientBuilder should not failed unless provided with invalid network url",
-            ),
+        .await
+        .expect("SuiClientBuilder should not failed unless provided with invalid network url"),
         options.rpc_config.retry_config.clone(),
         Some(metrics.clone()),
     );
@@ -893,7 +882,7 @@ pub fn get_server_options_from_env() -> anyhow::Result<KeyServerOptions> {
                 std::fs::File::open(&config_path)
                     .context(format!("Cannot open configuration file {config_path}"))?,
             )
-                .expect("Failed to parse configuration file");
+            .expect("Failed to parse configuration file");
 
             // Handle Custom network NODE_URL configuration
             if let Network::Custom {
@@ -924,7 +913,7 @@ pub fn get_server_options_from_env() -> anyhow::Result<KeyServerOptions> {
         Err(_) => {
             info!("Using local environment variables for configuration, should only be used for testing");
             let network = env::var("NETWORK")
-                .map(|n| Network::from_str(&n))
+                .map(|n| Network::from_str_unchecked(&n))
                 .unwrap_or(Network::Testnet);
             let options = KeyServerOptions::new_open_server_with_default_values(
                 network,

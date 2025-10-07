@@ -9,10 +9,11 @@ use tracing_test::traced_test;
 use crate::externals::get_latest_checkpoint_timestamp;
 use crate::key_server_options::RetryConfig;
 use crate::metrics::Metrics;
-use crate::{get_server_options_from_env, start_server_background_tasks};
 use crate::sui_rpc_client::SuiRpcClient;
 use crate::tests::SealTestCluster;
+use crate::{get_server_options_from_env, start_server_background_tasks};
 
+use crate::master_keys::MasterKeys;
 use crate::signed_message::signed_request;
 use crate::{app, time, Certificate, DefaultEncoding, FetchKeyRequest};
 use axum::body::Body;
@@ -43,7 +44,6 @@ use sui_types::base_types::{ObjectID, SuiAddress};
 use sui_types::crypto::Signature;
 use sui_types::signature::GenericSignature;
 use tokio::net::TcpListener;
-use crate::master_keys::MasterKeys;
 
 #[tokio::test]
 async fn test_get_latest_checkpoint_timestamp() {

@@ -509,7 +509,7 @@ async fn create_server(
     sui_client: SuiClient,
     client_configs: Vec<ClientConfig>,
     vars: impl AsRef<[(&str, &[u8])]>,
-) -> Server {
+) -> Server<SuiClient> {
     let options = KeyServerOptions {
         network: Network::TestCluster,
         server_mode: ServerMode::Permissioned { client_configs },

@@ -58,8 +58,7 @@ use sui_sdk::rpc_types::{SuiExecutionStatus, SuiTransactionBlockEffectsAPI};
 use sui_sdk::types::base_types::{ObjectID, SuiAddress};
 use sui_sdk::types::signature::GenericSignature;
 use sui_sdk::types::transaction::{ProgrammableTransaction, TransactionData, TransactionKind};
-use sui_sdk::verify_personal_message_signature::verify_personal_message_signature;
-use sui_sdk::SuiClientBuilder;
+use sui_sdk::{SuiClient, SuiClientBuilder};
 use tap::tap::TapFallible;
 use tap::Tap;
 use tokio::sync::watch::Receiver;
@@ -68,6 +67,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{debug, error, info, warn};
 use valid_ptb::ValidPtb;
+use crate::sui_rpc_client::{verify_personal_message_signature, RpcClient};
 
 mod cache;
 mod errors;
@@ -128,26 +128,18 @@ struct FetchKeyRequest {
 type Timestamp = u64;
 
 #[derive(Clone)]
-struct Server {
-    sui_rpc_client: SuiRpcClient,
+struct Server<Client: RpcClient> {
+    sui_rpc_client: SuiRpcClient<Client>,
     master_keys: MasterKeys,
     key_server_oid_to_pop: HashMap<ObjectID, MasterKeyPOP>,
     options: KeyServerOptions,
 }
 
-impl Server {
-    async fn new(options: KeyServerOptions, metrics: Option<Arc<Metrics>>) -> Self {
-        let sui_rpc_client = SuiRpcClient::new(
-            SuiClientBuilder::default()
-                .request_timeout(options.rpc_config.timeout)
-                .build(&options.network.node_url())
-                .await
-                .expect(
-                    "SuiClientBuilder should not failed unless provided with invalid network url",
-                ),
-            options.rpc_config.retry_config.clone(),
-            metrics,
-        );
+impl<Client: RpcClient> Server<Client> {
+    async fn new(
+        sui_rpc_client: SuiRpcClient<Client>,
+        options: KeyServerOptions,
+    ) -> Self {
         info!("Server started with network: {:?}", options.network);
         let master_keys = MasterKeys::load(&options).unwrap_or_else(|e| {
             panic!("Failed to load master keys: {}", e);
@@ -494,8 +486,8 @@ impl Server {
 }
 
 #[allow(clippy::single_match)]
-async fn handle_fetch_key_internal(
-    app_state: &MyState,
+async fn handle_fetch_key_internal<Client: RpcClient>(
+    app_state: &MyState<Client>,
     payload: &FetchKeyRequest,
     req_id: Option<&str>,
     sdk_version: &str,
@@ -534,8 +526,8 @@ async fn handle_fetch_key_internal(
         })
 }
 
-async fn handle_fetch_key(
-    State(app_state): State<MyState>,
+async fn handle_fetch_key<Client: RpcClient>(
+    State(app_state): State<MyState<Client>>,
     headers: HeaderMap,
     Json(payload): Json<FetchKeyRequest>,
 ) -> Result<Json<FetchKeyResponse>, InternalError> {
@@ -572,8 +564,8 @@ struct GetServiceResponse {
     pop: MasterKeyPOP,
 }
 
-async fn handle_get_service(
-    State(app_state): State<MyState>,
+async fn handle_get_service<Client: RpcClient>(
+    State(app_state): State<MyState<Client>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<GetServiceResponse>, InternalError> {
     app_state.metrics.service_requests.inc();
@@ -595,14 +587,14 @@ async fn handle_get_service(
 }
 
 #[derive(Clone)]
-struct MyState {
+struct MyState<Client: RpcClient> {
     metrics: Arc<Metrics>,
-    server: Arc<Server>,
+    server: Arc<Server<Client>>,
     latest_checkpoint_timestamp_receiver: Receiver<Timestamp>,
     reference_gas_price_receiver: Receiver<u64>,
 }
 
-impl MyState {
+impl<Client: RpcClient> MyState<Client> {
     fn check_full_node_is_fresh(&self) -> Result<(), InternalError> {
         // Compute the staleness of the latest checkpoint timestamp.
         let staleness =
@@ -635,8 +627,8 @@ impl MyState {
 }
 
 /// Middleware to validate the SDK version.
-async fn handle_request_headers(
-    state: State<MyState>,
+async fn handle_request_headers<Client: RpcClient>(
+    state: State<MyState<Client>>,
     request: Request,
     next: Next,
 ) -> Result<Response, InternalError> {
@@ -703,8 +695,8 @@ fn uptime_metric(version: &str) -> Box<dyn prometheus::core::Collector> {
 ///  - optional metrics pusher (if configured).
 ///
 /// The returned JoinHandle can be used to catch any tasks error or panic.
-async fn start_server_background_tasks(
-    server: Arc<Server>,
+async fn start_server_background_tasks<Client: RpcClient>(
+    server: Arc<Server<Client>>,
     metrics: Arc<Metrics>,
     registry: prometheus::Registry,
 ) -> (
@@ -854,12 +846,24 @@ pub(crate) async fn app() -> Result<(JoinHandle<Result<()>>, Router)> {
     // hook up custom application metrics
     let metrics = Arc::new(Metrics::new(&registry));
 
+    let sui_rpc_client = SuiRpcClient::new(
+        SuiClientBuilder::default()
+            .request_timeout(options.rpc_config.timeout)
+            .build(&options.network.node_url())
+            .await
+            .expect(
+                "SuiClientBuilder should not failed unless provided with invalid network url",
+            ),
+        options.rpc_config.retry_config.clone(),
+        Some(metrics.clone()),
+    );
+
     info!(
         "Starting server, version {}",
         format!("{}-{}", package_version!(), GIT_VERSION).as_str()
     );
     options.validate()?;
-    let server = Arc::new(Server::new(options, Some(metrics.clone())).await);
+    let server = Arc::new(Server::new(sui_rpc_client, options).await);
 
     let (latest_checkpoint_timestamp_receiver, reference_gas_price_receiver, monitor_handle) =
         start_server_background_tasks(server.clone(), metrics.clone(), registry.clone()).await;
@@ -877,7 +881,7 @@ pub(crate) async fn app() -> Result<(JoinHandle<Result<()>>, Router)> {
         .allow_headers(Any)
         .expose_headers(Any);
 
-    let app = get_mysten_service::<MyState>(package_name!(), package_version!())
+    let app = get_mysten_service::<MyState<SuiClient>>(package_name!(), package_version!())
         .merge(
             axum::Router::new()
                 .route("/v1/fetch_key", post(handle_fetch_key))

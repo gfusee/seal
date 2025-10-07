@@ -14,7 +14,6 @@ use crate::time::checked_duration_since;
 use crate::time::from_mins;
 use crate::time::{duration_since_as_f64, saturating_duration_since};
 use crate::types::{MasterKeyPOP, Network};
-use anyhow::{Context, Result};
 use axum::extract::{Query, Request};
 use axum::http::{HeaderMap, HeaderValue};
 use axum::middleware::{from_fn_with_state, map_response, Next};
@@ -51,6 +50,8 @@ use std::collections::HashMap;
 use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use anyhow::Context;
+use prometheus::Registry;
 use sui_rpc_client::SuiRpcClient;
 use sui_sdk::error::Error;
 use sui_sdk::rpc_types::{SuiExecutionStatus, SuiTransactionBlockEffectsAPI};
@@ -59,7 +60,6 @@ use sui_sdk::types::signature::GenericSignature;
 use sui_sdk::types::transaction::{ProgrammableTransaction, TransactionData, TransactionKind};
 use sui_sdk::SuiClientBuilder;
 use tap::tap::TapFallible;
-use tap::Tap;
 use tokio::sync::watch::Receiver;
 use tokio::task::JoinHandle;
 use tower_http::cors::{Any, CorsLayer};
@@ -98,7 +98,7 @@ type DefaultEncoding = PrefixedHex;
 
 // TODO: Remove legacy once key-server crate uses sui-sdk-types.
 #[derive(Clone, Serialize, Deserialize, Debug)]
-struct Certificate {
+pub struct Certificate {
     pub user: SuiAddress,
     pub session_vk: Ed25519PublicKey,
     pub creation_time: u64,
@@ -109,25 +109,25 @@ struct Certificate {
 
 // TODO: Remove legacy once key-server crate uses sui-sdk-types.
 #[derive(Serialize, Deserialize)]
-struct FetchKeyRequest {
+pub struct FetchKeyRequest {
     // Next fields must be signed to prevent others from sending requests on behalf of the user and
     // being able to fetch the key
-    ptb: String, // must adhere specific structure, see ValidPtb
+    pub ptb: String, // must adhere specific structure, see ValidPtb
     // We don't want to rely on https only for restricting the response to this user, since in the
     // case of multiple services, one service can do a replay attack to get the key from other
     // services.
-    enc_key: ElGamalPublicKey,
-    enc_verification_key: ElgamalVerificationKey,
-    request_signature: Ed25519Signature,
+    pub enc_key: ElGamalPublicKey,
+    pub enc_verification_key: ElgamalVerificationKey,
+    pub request_signature: Ed25519Signature,
 
-    certificate: Certificate,
+    pub certificate: Certificate,
 }
 
 /// UNIX timestamp in milliseconds.
 type Timestamp = u64;
 
 #[derive(Clone)]
-struct Server<Client: RpcClient> {
+pub struct Server<Client: RpcClient> {
     sui_rpc_client: SuiRpcClient<Client>,
     master_keys: MasterKeys,
     key_server_oid_to_pop: HashMap<ObjectID, MasterKeyPOP>,
@@ -162,6 +162,16 @@ impl<Client: RpcClient> Server<Client> {
             key_server_oid_to_pop,
             options,
         }
+    }
+
+    pub fn get_pop(
+        &self,
+        service_id: ObjectID
+    ) -> Result<MasterKeyPOP, InternalError> {
+        self.key_server_oid_to_pop
+            .get(&service_id)
+            .copied()
+            .ok_or(InternalError::InvalidServiceId)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -375,7 +385,7 @@ impl<Client: RpcClient> Server<Client> {
         Ok((first_pkg_id, valid_ptb.full_ids(&first_pkg_id)))
     }
 
-    fn create_response(
+    pub(crate) fn create_response(
         &self,
         first_pkg_id: ObjectID,
         ids: &[KeyId],
@@ -485,12 +495,58 @@ impl<Client: RpcClient> Server<Client> {
 }
 
 #[allow(clippy::single_match)]
+pub async fn fetch_key<Client: RpcClient>(
+    server: Arc<Server<Client>>,
+    payload: &FetchKeyRequest,
+    valid_ptb: ValidPtb,
+    req_id: Option<&str>,
+    sdk_version: &str,
+    gas_price: u64,
+    metrics: Option<&Metrics>,
+) -> Result<FetchKeyResponse, InternalError> {
+    // Report the number of id's in the request to the metrics.
+    let check_request_result = server.check_request(
+        &valid_ptb,
+        &payload.enc_key,
+        &payload.enc_verification_key,
+        &payload.request_signature,
+        &payload.certificate,
+        gas_price,
+        metrics,
+        req_id,
+        payload.certificate.mvr_name.clone(),
+    )
+        .await;
+
+    let request_info = json!({ "user": payload.certificate.user, "package_id": valid_ptb.pkg_id(), "req_id": req_id, "sdk_version": sdk_version });
+    match check_request_result {
+        Ok((first_pkg_id, full_ids)) => {
+            info!("Valid request: {request_info}");
+
+            let response = server.create_response(
+                first_pkg_id,
+                &full_ids,
+                &payload.enc_key
+            );
+
+            Ok(response)
+        },
+        Err(InternalError::Failure(s)) => {
+            warn!("Check request failed with debug message '{s}': {request_info}");
+
+            Err(InternalError::Failure(s))
+        },
+        Err(error) => Err(error)
+    }
+}
+
+#[allow(clippy::single_match)]
 async fn handle_fetch_key_internal<Client: RpcClient>(
     app_state: &MyState<Client>,
     payload: &FetchKeyRequest,
     req_id: Option<&str>,
     sdk_version: &str,
-) -> Result<(ObjectID, Vec<KeyId>), InternalError> {
+) -> Result<FetchKeyResponse, InternalError> {
     app_state.check_full_node_is_fresh()?;
 
     let valid_ptb = ValidPtb::try_from_base64(&payload.ptb)?;
@@ -501,28 +557,15 @@ async fn handle_fetch_key_internal<Client: RpcClient>(
         .requests_per_number_of_ids
         .observe(valid_ptb.inner_ids().len() as f64);
 
-    app_state
-        .server
-        .check_request(
-            &valid_ptb,
-            &payload.enc_key,
-            &payload.enc_verification_key,
-            &payload.request_signature,
-            &payload.certificate,
-            app_state.reference_gas_price(),
-            Some(&app_state.metrics),
-            req_id,
-            payload.certificate.mvr_name.clone(),
-        )
-        .await
-        .tap(|r| {
-            let request_info = json!({ "user": payload.certificate.user, "package_id": valid_ptb.pkg_id(), "req_id": req_id, "sdk_version": sdk_version });
-            match r {
-                Ok(_) => info!("Valid request: {request_info}"),
-                Err(InternalError::Failure(s)) => warn!("Check request failed with debug message '{s}': {request_info}"),
-                _ => {},
-            }
-        })
+    fetch_key(
+        app_state.server.clone(),
+        payload,
+        valid_ptb,
+        req_id,
+        sdk_version,
+        app_state.reference_gas_price(),
+        Some(&app_state.metrics)
+    ).await
 }
 
 async fn handle_fetch_key<Client: RpcClient>(
@@ -548,12 +591,8 @@ async fn handle_fetch_key<Client: RpcClient>(
     handle_fetch_key_internal(&app_state, &payload, req_id, sdk_version)
         .await
         .tap_err(|e| app_state.metrics.observe_error(e.as_str()))
-        .map(|(first_pkg_id, full_ids)| {
-            Json(
-                app_state
-                    .server
-                    .create_response(first_pkg_id, &full_ids, &payload.enc_key),
-            )
+        .map(|response| {
+            Json(response)
         })
 }
 
@@ -576,11 +615,9 @@ async fn handle_get_service<Client: RpcClient>(
             ObjectID::from_hex_literal(id).map_err(|_| InternalError::InvalidServiceId)
         })?;
 
-    let pop = *app_state
+    let pop = app_state
         .server
-        .key_server_oid_to_pop
-        .get(&service_id)
-        .ok_or(InternalError::InvalidServiceId)?;
+        .get_pop(service_id)?;
 
     Ok(Json(GetServiceResponse { service_id, pop }))
 }
@@ -758,7 +795,47 @@ async fn start_server_background_tasks<Client: RpcClient>(
     )
 }
 
-pub async fn app<Client: RpcClient>() -> Result<(JoinHandle<Result<()>>, Router)> {
+pub async fn app<Client: RpcClient>() -> anyhow::Result<(JoinHandle<anyhow::Result<()>>, Router)> {
+    let (server, metrics, registry) = get_server().await?;
+
+    let (latest_checkpoint_timestamp_receiver, reference_gas_price_receiver, monitor_handle) =
+        start_server_background_tasks(server.clone(), metrics.clone(), registry.clone()).await;
+
+    let state = MyState {
+        metrics,
+        server,
+        latest_checkpoint_timestamp_receiver,
+        reference_gas_price_receiver,
+    };
+
+    let cors = CorsLayer::new()
+        .allow_methods(Any)
+        .allow_origin(Any)
+        .allow_headers(Any)
+        .expose_headers(Any);
+
+    let app = get_mysten_service::<MyState<Client>>(package_name!(), package_version!())
+        .merge(
+            axum::Router::new()
+                .route("/v1/fetch_key", post(handle_fetch_key))
+                .route("/v1/service", get(handle_get_service))
+                .layer(from_fn_with_state(state.clone(), handle_request_headers))
+                .layer(map_response(add_response_headers))
+                // Outside most middlewares that tracks metrics for HTTP requests and response
+                // status.
+                .layer(from_fn_with_state(
+                    state.metrics.clone(),
+                    metrics_middleware,
+                )),
+        )
+        .with_state(state)
+        // Global body size limit
+        .layer(RequestBodyLimitLayer::new(MAX_REQUEST_SIZE))
+        .layer(cors);
+    Ok((monitor_handle, app))
+}
+
+pub async fn get_server<Client: RpcClient>() -> anyhow::Result<(Arc<Server<Client>>, Arc<Metrics>, Registry)> {
     // If CONFIG_PATH is set, read the configuration from the file.
     // Otherwise, use the local environment variables.
     let options = match env::var("CONFIG_PATH") {
@@ -847,41 +924,8 @@ pub async fn app<Client: RpcClient>() -> Result<(JoinHandle<Result<()>>, Router)
         format!("{}-{}", package_version!(), GIT_VERSION).as_str()
     );
     options.validate()?;
+
     let server = Arc::new(Server::new(sui_rpc_client, options).await);
 
-    let (latest_checkpoint_timestamp_receiver, reference_gas_price_receiver, monitor_handle) =
-        start_server_background_tasks(server.clone(), metrics.clone(), registry.clone()).await;
-
-    let state = MyState {
-        metrics,
-        server,
-        latest_checkpoint_timestamp_receiver,
-        reference_gas_price_receiver,
-    };
-
-    let cors = CorsLayer::new()
-        .allow_methods(Any)
-        .allow_origin(Any)
-        .allow_headers(Any)
-        .expose_headers(Any);
-
-    let app = get_mysten_service::<MyState<Client>>(package_name!(), package_version!())
-        .merge(
-            axum::Router::new()
-                .route("/v1/fetch_key", post(handle_fetch_key))
-                .route("/v1/service", get(handle_get_service))
-                .layer(from_fn_with_state(state.clone(), handle_request_headers))
-                .layer(map_response(add_response_headers))
-                // Outside most middlewares that tracks metrics for HTTP requests and response
-                // status.
-                .layer(from_fn_with_state(
-                    state.metrics.clone(),
-                    metrics_middleware,
-                )),
-        )
-        .with_state(state)
-        // Global body size limit
-        .layer(RequestBodyLimitLayer::new(MAX_REQUEST_SIZE))
-        .layer(cors);
-    Ok((monitor_handle, app))
+    Ok((server, metrics, registry))
 }

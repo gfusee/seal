@@ -125,6 +125,12 @@ where
 
 #[async_trait]
 pub trait RpcClient: Clone + Send + Sync + 'static {
+    async fn new_from_builder<Fut>(
+        build: Fut
+    ) -> SuiRpcResult<Self>
+    where
+        Fut: Future<Output = SuiRpcResult<SuiClient>> + Send;
+    
     async fn dry_run_transaction_block(
         &self,
         tx: TransactionData,
@@ -161,6 +167,15 @@ pub trait RpcClient: Clone + Send + Sync + 'static {
 
 #[async_trait]
 impl RpcClient for SuiClient {
+    async fn new_from_builder<Fut>(
+        build: Fut
+    ) -> SuiRpcResult<Self>
+    where
+        Fut: Future<Output = SuiRpcResult<SuiClient>> + Send,
+    {
+        build.await
+    }
+    
     async fn dry_run_transaction_block(&self, tx: TransactionData) -> SuiRpcResult<DryRunTransactionBlockResponse> {
         self.read_api()
             .dry_run_transaction_block(tx)

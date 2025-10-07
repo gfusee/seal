@@ -762,7 +762,7 @@ async fn start_server_background_tasks<Client: RpcClient>(
 #[tokio::main]
 async fn main() -> Result<()> {
     let _guard = mysten_service::logging::init();
-    let (monitor_handle, app) = app().await?;
+    let (monitor_handle, app) = app::<SuiClient>().await?;
 
     tokio::select! {
         server_result = serve(app) => {
@@ -776,7 +776,7 @@ async fn main() -> Result<()> {
     }
 }
 
-pub(crate) async fn app() -> Result<(JoinHandle<Result<()>>, Router)> {
+pub async fn app<Client: RpcClient>() -> Result<(JoinHandle<Result<()>>, Router)> {
     // If CONFIG_PATH is set, read the configuration from the file.
     // Otherwise, use the local environment variables.
     let options = match env::var("CONFIG_PATH") {
@@ -847,9 +847,11 @@ pub(crate) async fn app() -> Result<(JoinHandle<Result<()>>, Router)> {
     let metrics = Arc::new(Metrics::new(&registry));
 
     let sui_rpc_client = SuiRpcClient::new(
-        SuiClientBuilder::default()
-            .request_timeout(options.rpc_config.timeout)
-            .build(&options.network.node_url())
+        Client::new_from_builder(
+            SuiClientBuilder::default()
+                .request_timeout(options.rpc_config.timeout)
+                .build(&options.network.node_url())
+        )
             .await
             .expect(
                 "SuiClientBuilder should not failed unless provided with invalid network url",
@@ -881,7 +883,7 @@ pub(crate) async fn app() -> Result<(JoinHandle<Result<()>>, Router)> {
         .allow_headers(Any)
         .expose_headers(Any);
 
-    let app = get_mysten_service::<MyState<SuiClient>>(package_name!(), package_version!())
+    let app = get_mysten_service::<MyState<Client>>(package_name!(), package_version!())
         .merge(
             axum::Router::new()
                 .route("/v1/fetch_key", post(handle_fetch_key))

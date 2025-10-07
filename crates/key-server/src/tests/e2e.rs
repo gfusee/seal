@@ -531,7 +531,7 @@ async fn create_server(
 
     Server {
         sui_rpc_client: SuiRpcClient::new(sui_client, RetryConfig::default(), None),
-        master_keys: temp_env::with_vars(vars, || MasterKeys::load(&options)).unwrap(),
+        master_keys: temp_env::with_vars(vars, || MasterKeys::load_from_env(&options.server_mode)).unwrap(),
         key_server_oid_to_pop: HashMap::new(),
         options,
     }

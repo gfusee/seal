@@ -138,11 +138,9 @@ impl<Client: RpcClient> Server<Client> {
     async fn new(
         sui_rpc_client: SuiRpcClient<Client>,
         options: KeyServerOptions,
+        master_keys: MasterKeys,
     ) -> Self {
         info!("Server started with network: {:?}", options.network);
-        let master_keys = MasterKeys::load(&options).unwrap_or_else(|e| {
-            panic!("Failed to load master keys: {}", e);
-        });
 
         let key_server_oid_to_pop = options
             .get_supported_key_server_object_ids()
@@ -795,8 +793,11 @@ async fn start_server_background_tasks<Client: RpcClient>(
     )
 }
 
-pub async fn app<Client: RpcClient>() -> anyhow::Result<(JoinHandle<anyhow::Result<()>>, Router)> {
-    let (server, metrics, registry) = get_server().await?;
+pub async fn app<Client: RpcClient>(
+    options: KeyServerOptions,
+    master_keys: MasterKeys
+) -> anyhow::Result<(JoinHandle<anyhow::Result<()>>, Router)> {
+    let (server, metrics, registry) = get_server(options, master_keys).await?;
 
     let (latest_checkpoint_timestamp_receiver, reference_gas_price_receiver, monitor_handle) =
         start_server_background_tasks(server.clone(), metrics.clone(), registry.clone()).await;
@@ -835,56 +836,10 @@ pub async fn app<Client: RpcClient>() -> anyhow::Result<(JoinHandle<anyhow::Resu
     Ok((monitor_handle, app))
 }
 
-pub async fn get_server<Client: RpcClient>() -> anyhow::Result<(Arc<Server<Client>>, Arc<Metrics>, Registry)> {
-    // If CONFIG_PATH is set, read the configuration from the file.
-    // Otherwise, use the local environment variables.
-    let options = match env::var("CONFIG_PATH") {
-        Ok(config_path) => {
-            info!("Loading config file: {}", config_path);
-            let mut opts: KeyServerOptions = serde_yaml::from_reader(
-                std::fs::File::open(&config_path)
-                    .context(format!("Cannot open configuration file {config_path}"))?,
-            )
-                .expect("Failed to parse configuration file");
-
-            // Handle Custom network NODE_URL configuration
-            if let Network::Custom {
-                ref mut node_url, ..
-            } = opts.network
-            {
-                let env_node_url = env::var("NODE_URL").ok();
-
-                match (node_url.as_ref(), env_node_url.as_ref()) {
-                    (Some(_), Some(_)) => {
-                        panic!("NODE_URL cannot be provided in both config file and environment variable. Please use only one source.");
-                    }
-                    (None, Some(url)) => {
-                        info!("Using NODE_URL from environment variable: {}", url);
-                        *node_url = Some(url.clone());
-                    }
-                    (Some(url), None) => {
-                        info!("Using NODE_URL from config file: {}", url);
-                    }
-                    (None, None) => {
-                        panic!("Custom network requires NODE_URL to be set either in config file or as environment variable");
-                    }
-                }
-            }
-
-            opts
-        }
-        Err(_) => {
-            info!("Using local environment variables for configuration, should only be used for testing");
-            let network = env::var("NETWORK")
-                .map(|n| Network::from_str(&n))
-                .unwrap_or(Network::Testnet);
-            KeyServerOptions::new_open_server_with_default_values(
-                network,
-                utils::decode_object_id("KEY_SERVER_OBJECT_ID")?,
-            )
-        }
-    };
-
+pub async fn get_server<Client: RpcClient>(
+    options: KeyServerOptions,
+    master_keys: MasterKeys
+) -> anyhow::Result<(Arc<Server<Client>>, Arc<Metrics>, Registry)> {
     info!("Setting up metrics");
     let registry = start_prometheus_server(SocketAddr::new(
         IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
@@ -925,7 +880,58 @@ pub async fn get_server<Client: RpcClient>() -> anyhow::Result<(Arc<Server<Clien
     );
     options.validate()?;
 
-    let server = Arc::new(Server::new(sui_rpc_client, options).await);
+    let server = Arc::new(Server::new(sui_rpc_client, options, master_keys).await);
 
     Ok((server, metrics, registry))
+}
+
+pub fn get_server_options_from_env() -> anyhow::Result<KeyServerOptions> {
+    match env::var("CONFIG_PATH") {
+        Ok(config_path) => {
+            info!("Loading config file: {}", config_path);
+            let mut opts: KeyServerOptions = serde_yaml::from_reader(
+                std::fs::File::open(&config_path)
+                    .context(format!("Cannot open configuration file {config_path}"))?,
+            )
+                .expect("Failed to parse configuration file");
+
+            // Handle Custom network NODE_URL configuration
+            if let Network::Custom {
+                ref mut node_url, ..
+            } = opts.network
+            {
+                let env_node_url = env::var("NODE_URL").ok();
+
+                match (node_url.as_ref(), env_node_url.as_ref()) {
+                    (Some(_), Some(_)) => {
+                        panic!("NODE_URL cannot be provided in both config file and environment variable. Please use only one source.");
+                    }
+                    (None, Some(url)) => {
+                        info!("Using NODE_URL from environment variable: {}", url);
+                        *node_url = Some(url.clone());
+                    }
+                    (Some(url), None) => {
+                        info!("Using NODE_URL from config file: {}", url);
+                    }
+                    (None, None) => {
+                        panic!("Custom network requires NODE_URL to be set either in config file or as environment variable");
+                    }
+                }
+            }
+
+            Ok(opts)
+        }
+        Err(_) => {
+            info!("Using local environment variables for configuration, should only be used for testing");
+            let network = env::var("NETWORK")
+                .map(|n| Network::from_str(&n))
+                .unwrap_or(Network::Testnet);
+            let options = KeyServerOptions::new_open_server_with_default_values(
+                network,
+                utils::decode_object_id("KEY_SERVER_OBJECT_ID")?,
+            );
+
+            Ok(options)
+        }
+    }
 }

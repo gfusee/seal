@@ -774,7 +774,7 @@ async fn main() -> Result<()> {
     let (monitor_handle, app) = app().await?;
 
     let serve = async {
-        let port = u16::from_str(&env::var("PORT").unwrap()).unwrap();
+        let port = u16::from_str(&env::var("PORT").unwrap_or(format!("{DEFAULT_PORT}"))).unwrap();
 
         debug!("listening on http://localhost:{port}");
 

@@ -37,7 +37,7 @@ use jsonrpsee::types::error::{INVALID_PARAMS_CODE, METHOD_NOT_FOUND_CODE};
 use key_server_options::KeyServerOptions;
 use master_keys::MasterKeys;
 use metrics::metrics_middleware;
-use mysten_service::get_mysten_service;
+use mysten_service::{get_mysten_service, DEFAULT_PORT};
 use mysten_service::metrics::start_prometheus_server;
 use mysten_service::package_name;
 use mysten_service::package_version;
@@ -51,6 +51,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
 use sui_rpc_client::SuiRpcClient;
 use sui_sdk::error::Error;
@@ -772,8 +773,21 @@ async fn main() -> Result<()> {
     let _guard = mysten_service::logging::init();
     let (monitor_handle, app) = app().await?;
 
+    let serve = async {
+        let port = u16::from_str(&env::var("PORT").unwrap()).unwrap();
+
+        debug!("listening on http://localhost:{port}");
+
+        let listener = tokio::net::TcpListener::bind(&format!("0.0.0.0:{}", port))
+            .await
+            .unwrap();
+        axum::serve(listener, app).await?;
+
+        Ok::<(), anyhow::Error>(())
+    };
+
     tokio::select! {
-        server_result = serve(app) => {
+        server_result = serve => {
             error!("Server stopped with status {:?}", server_result);
             std::process::exit(1);
         }

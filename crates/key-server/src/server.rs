@@ -41,7 +41,6 @@ use mysten_service::get_mysten_service;
 use mysten_service::metrics::start_prometheus_server;
 use mysten_service::package_name;
 use mysten_service::package_version;
-use mysten_service::serve;
 use rand::thread_rng;
 use seal_sdk::types::{DecryptionKey, ElGamalPublicKey, ElgamalVerificationKey, KeyId};
 use seal_sdk::{signed_message, FetchKeyResponse};
@@ -387,314 +386,314 @@ impl Server {
     fn create_response(
         &self,
         first_pkg_id: ObjectID,
-        ids: &[KeyId],
-        enc_key: &ElGamalPublicKey,
-    ) -> FetchKeyResponse {
-        debug!(
-            "Creating response for ids: {:?}",
-            ids.iter().map(Hex::encode).collect::<Vec<_>>()
-        );
-        let master_key = self
-            .master_keys
-            .get_key_for_package(&first_pkg_id)
-            .expect("checked already");
-        let decryption_keys = ids
-            .iter()
-            .map(|id| {
-                // Requested key
-                let key = ibe::extract(master_key, id);
-                // ElGamal encryption of key under the user's public key
-                let encrypted_key = encrypt(&mut thread_rng(), &key, enc_key);
-                DecryptionKey {
-                    id: id.to_owned(),
-                    encrypted_key,
-                }
+    ids: &[KeyId],
+    enc_key: &ElGamalPublicKey,
+) -> FetchKeyResponse {
+    debug!(
+        "Creating response for ids: {:?}",
+        ids.iter().map(Hex::encode).collect::<Vec<_>>()
+    );
+    let master_key = self
+        .master_keys
+        .get_key_for_package(&first_pkg_id)
+        .expect("checked already");
+    let decryption_keys = ids
+        .iter()
+        .map(|id| {
+            // Requested key
+            let key = ibe::extract(master_key, id);
+            // ElGamal encryption of key under the user's public key
+            let encrypted_key = encrypt(&mut thread_rng(), &key, enc_key);
+            DecryptionKey {
+                id: id.to_owned(),
+                encrypted_key,
+            }
+        })
+        .collect();
+    FetchKeyResponse { decryption_keys }
+}
+
+/// Spawns a thread that fetches the latest checkpoint timestamp and sends it to a [Receiver] once per `update_interval`.
+/// Returns the [Receiver].
+async fn spawn_latest_checkpoint_timestamp_updater(
+    &self,
+    metrics: Option<&Metrics>,
+) -> (Receiver<Timestamp>, JoinHandle<()>) {
+    spawn_periodic_updater(
+        &self.sui_rpc_client,
+        self.options.checkpoint_update_interval,
+        get_latest_checkpoint_timestamp,
+        "latest checkpoint timestamp",
+        metrics.map(|m| {
+            observation_callback(&m.checkpoint_timestamp_delay, |ts| {
+                let duration = duration_since_as_f64(ts);
+                debug!("Latest checkpoint timestamp delay is {duration} ms");
+                duration
             })
-            .collect();
-        FetchKeyResponse { decryption_keys }
-    }
+        }),
+        metrics.map(|m| {
+            observation_callback(&m.get_checkpoint_timestamp_duration, |d: Duration| {
+                d.as_millis() as f64
+            })
+        }),
+        metrics.map(|m| status_callback(&m.get_checkpoint_timestamp_status)),
+    )
+    .await
+}
 
-    /// Spawns a thread that fetches the latest checkpoint timestamp and sends it to a [Receiver] once per `update_interval`.
-    /// Returns the [Receiver].
-    async fn spawn_latest_checkpoint_timestamp_updater(
-        &self,
-        metrics: Option<&Metrics>,
-    ) -> (Receiver<Timestamp>, JoinHandle<()>) {
-        spawn_periodic_updater(
-            &self.sui_rpc_client,
-            self.options.checkpoint_update_interval,
-            get_latest_checkpoint_timestamp,
-            "latest checkpoint timestamp",
-            metrics.map(|m| {
-                observation_callback(&m.checkpoint_timestamp_delay, |ts| {
-                    let duration = duration_since_as_f64(ts);
-                    debug!("Latest checkpoint timestamp delay is {duration} ms");
-                    duration
-                })
-            }),
-            metrics.map(|m| {
-                observation_callback(&m.get_checkpoint_timestamp_duration, |d: Duration| {
-                    d.as_millis() as f64
-                })
-            }),
-            metrics.map(|m| status_callback(&m.get_checkpoint_timestamp_status)),
-        )
-        .await
-    }
+/// Spawns a thread that fetches RGP and sends it to a [Receiver] once per `update_interval`.
+/// Returns the [Receiver].
+async fn spawn_reference_gas_price_updater(
+    &self,
+    metrics: Option<&Metrics>,
+) -> (Receiver<u64>, JoinHandle<()>) {
+    spawn_periodic_updater(
+        &self.sui_rpc_client,
+        self.options.rgp_update_interval,
+        get_reference_gas_price,
+        "RGP",
+        None::<fn(u64)>,
+        None::<fn(Duration)>,
+        metrics.map(|m| status_callback(&m.get_reference_gas_price_status)),
+    )
+    .await
+}
 
-    /// Spawns a thread that fetches RGP and sends it to a [Receiver] once per `update_interval`.
-    /// Returns the [Receiver].
-    async fn spawn_reference_gas_price_updater(
-        &self,
-        metrics: Option<&Metrics>,
-    ) -> (Receiver<u64>, JoinHandle<()>) {
-        spawn_periodic_updater(
-            &self.sui_rpc_client,
-            self.options.rgp_update_interval,
-            get_reference_gas_price,
-            "RGP",
-            None::<fn(u64)>,
-            None::<fn(Duration)>,
-            metrics.map(|m| status_callback(&m.get_reference_gas_price_status)),
-        )
-        .await
-    }
-
-    /// Spawn a metrics push background jobs that push metrics to seal-proxy
-    fn spawn_metrics_push_job(&self, registry: prometheus::Registry) -> JoinHandle<()> {
-        let push_config = self.options.metrics_push_config.clone();
-        if let Some(push_config) = push_config {
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(push_config.push_interval);
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                let mut client = create_push_client();
-                tracing::info!("starting metrics push to '{}'", &push_config.push_url);
-                loop {
-                    tokio::select! {
-                        _ = interval.tick() => {
-                            if let Err(error) = metrics_push::push_metrics(
-                                push_config.clone(),
-                                &client,
-                                &registry,
-                            ).await {
-                                tracing::warn!(?error, "unable to push metrics");
-                                client = create_push_client();
-                            }
+/// Spawn a metrics push background jobs that push metrics to seal-proxy
+fn spawn_metrics_push_job(&self, registry: prometheus::Registry) -> JoinHandle<()> {
+    let push_config = self.options.metrics_push_config.clone();
+    if let Some(push_config) = push_config {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(push_config.push_interval);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut client = create_push_client();
+            tracing::info!("starting metrics push to '{}'", &push_config.push_url);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Err(error) = metrics_push::push_metrics(
+                            push_config.clone(),
+                            &client,
+                            &registry,
+                        ).await {
+                            tracing::warn!(?error, "unable to push metrics");
+                            client = create_push_client();
                         }
                     }
                 }
-            })
-        } else {
-            tokio::spawn(async move {
-                warn!("No metrics push config is found");
-                pending().await
-            })
-        }
+            }
+        })
+    } else {
+        tokio::spawn(async move {
+            warn!("No metrics push config is found");
+            pending().await
+        })
     }
+}
 }
 
 #[allow(clippy::single_match)]
 async fn handle_fetch_key_internal(
-    app_state: &MyState,
-    payload: &FetchKeyRequest,
-    req_id: Option<&str>,
-    sdk_version: &str,
+app_state: &MyState,
+payload: &FetchKeyRequest,
+req_id: Option<&str>,
+sdk_version: &str,
 ) -> Result<(ObjectID, Vec<KeyId>), InternalError> {
-    app_state.check_full_node_is_fresh()?;
+app_state.check_full_node_is_fresh()?;
 
-    let valid_ptb = ValidPtb::try_from_base64(&payload.ptb)?;
+let valid_ptb = ValidPtb::try_from_base64(&payload.ptb)?;
 
-    // Report the number of id's in the request to the metrics.
-    app_state
-        .metrics
-        .requests_per_number_of_ids
-        .observe(valid_ptb.inner_ids().len() as f64);
+// Report the number of id's in the request to the metrics.
+app_state
+    .metrics
+    .requests_per_number_of_ids
+    .observe(valid_ptb.inner_ids().len() as f64);
 
-    app_state
-        .server
-        .check_request(
-            &valid_ptb,
-            &payload.enc_key,
-            &payload.enc_verification_key,
-            &payload.request_signature,
-            &payload.certificate,
-            app_state.reference_gas_price(),
-            Some(&app_state.metrics),
-            req_id,
-            payload.certificate.mvr_name.clone(),
-        )
-        .await
-        .tap(|r| {
-            let request_info = json!({ "user": payload.certificate.user, "package_id": valid_ptb.pkg_id(), "req_id": req_id, "sdk_version": sdk_version });
-            match r {
-                Ok(_) => info!("Valid request: {request_info}"),
-                Err(InternalError::Failure(s)) => warn!("Check request failed with debug message '{s}': {request_info}"),
-                _ => {},
-            }
-        })
+app_state
+    .server
+    .check_request(
+        &valid_ptb,
+        &payload.enc_key,
+        &payload.enc_verification_key,
+        &payload.request_signature,
+        &payload.certificate,
+        app_state.reference_gas_price(),
+        Some(&app_state.metrics),
+        req_id,
+        payload.certificate.mvr_name.clone(),
+    )
+    .await
+    .tap(|r| {
+        let request_info = json!({ "user": payload.certificate.user, "package_id": valid_ptb.pkg_id(), "req_id": req_id, "sdk_version": sdk_version });
+        match r {
+            Ok(_) => info!("Valid request: {request_info}"),
+            Err(InternalError::Failure(s)) => warn!("Check request failed with debug message '{s}': {request_info}"),
+            _ => {},
+        }
+    })
 }
 
 async fn handle_fetch_key(
-    State(app_state): State<MyState>,
-    headers: HeaderMap,
-    Json(payload): Json<FetchKeyRequest>,
+State(app_state): State<MyState>,
+headers: HeaderMap,
+Json(payload): Json<FetchKeyRequest>,
 ) -> Result<Json<FetchKeyResponse>, InternalError> {
-    let req_id = headers
-        .get("Request-Id")
-        .map(|v| v.to_str().unwrap_or_default());
-    let sdk_version = headers
-        .get("Client-Sdk-Version")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
+let req_id = headers
+    .get("Request-Id")
+    .map(|v| v.to_str().unwrap_or_default());
+let sdk_version = headers
+    .get("Client-Sdk-Version")
+    .and_then(|v| v.to_str().ok())
+    .unwrap_or_default();
 
-    app_state.metrics.requests.inc();
+app_state.metrics.requests.inc();
 
-    debug!(
-        "Checking request for ptb: {:?}, cert {:?} (req_id: {:?})",
-        payload.ptb, payload.certificate, req_id
-    );
+debug!(
+    "Checking request for ptb: {:?}, cert {:?} (req_id: {:?})",
+    payload.ptb, payload.certificate, req_id
+);
 
-    handle_fetch_key_internal(&app_state, &payload, req_id, sdk_version)
-        .await
-        .tap_err(|e| app_state.metrics.observe_error(e.as_str()))
-        .map(|(first_pkg_id, full_ids)| {
-            Json(
-                app_state
-                    .server
-                    .create_response(first_pkg_id, &full_ids, &payload.enc_key),
-            )
-        })
+handle_fetch_key_internal(&app_state, &payload, req_id, sdk_version)
+    .await
+    .tap_err(|e| app_state.metrics.observe_error(e.as_str()))
+    .map(|(first_pkg_id, full_ids)| {
+        Json(
+            app_state
+                .server
+                .create_response(first_pkg_id, &full_ids, &payload.enc_key),
+        )
+    })
 }
 
 #[derive(Serialize, Deserialize)]
 struct GetServiceResponse {
-    service_id: ObjectID,
-    pop: MasterKeyPOP,
+service_id: ObjectID,
+pop: MasterKeyPOP,
 }
 
 async fn handle_get_service(
-    State(app_state): State<MyState>,
-    Query(params): Query<HashMap<String, String>>,
+State(app_state): State<MyState>,
+Query(params): Query<HashMap<String, String>>,
 ) -> Result<Json<GetServiceResponse>, InternalError> {
-    app_state.metrics.service_requests.inc();
+app_state.metrics.service_requests.inc();
 
-    let service_id = params
-        .get("service_id")
-        .ok_or(InternalError::InvalidServiceId)
-        .and_then(|id| {
-            ObjectID::from_hex_literal(id).map_err(|_| InternalError::InvalidServiceId)
-        })?;
+let service_id = params
+    .get("service_id")
+    .ok_or(InternalError::InvalidServiceId)
+    .and_then(|id| {
+        ObjectID::from_hex_literal(id).map_err(|_| InternalError::InvalidServiceId)
+    })?;
 
-    let pop = *app_state
-        .server
-        .key_server_oid_to_pop
-        .get(&service_id)
-        .ok_or(InternalError::InvalidServiceId)?;
+let pop = *app_state
+    .server
+    .key_server_oid_to_pop
+    .get(&service_id)
+    .ok_or(InternalError::InvalidServiceId)?;
 
-    Ok(Json(GetServiceResponse { service_id, pop }))
+Ok(Json(GetServiceResponse { service_id, pop }))
 }
 
 #[derive(Clone)]
 struct MyState {
-    metrics: Arc<Metrics>,
-    server: Arc<Server>,
-    latest_checkpoint_timestamp_receiver: Receiver<Timestamp>,
-    reference_gas_price_receiver: Receiver<u64>,
+metrics: Arc<Metrics>,
+server: Arc<Server>,
+latest_checkpoint_timestamp_receiver: Receiver<Timestamp>,
+reference_gas_price_receiver: Receiver<u64>,
 }
 
 impl MyState {
-    fn check_full_node_is_fresh(&self) -> Result<(), InternalError> {
-        // Compute the staleness of the latest checkpoint timestamp.
-        let staleness =
-            saturating_duration_since(*self.latest_checkpoint_timestamp_receiver.borrow());
-        if staleness > self.server.options.allowed_staleness {
-            return Err(InternalError::Failure(format!(
-                "Full node is stale. Latest checkpoint is {} ms old.",
-                staleness.as_millis()
-            )));
-        }
-        Ok(())
+fn check_full_node_is_fresh(&self) -> Result<(), InternalError> {
+    // Compute the staleness of the latest checkpoint timestamp.
+    let staleness =
+        saturating_duration_since(*self.latest_checkpoint_timestamp_receiver.borrow());
+    if staleness > self.server.options.allowed_staleness {
+        return Err(InternalError::Failure(format!(
+            "Full node is stale. Latest checkpoint is {} ms old.",
+            staleness.as_millis()
+        )));
     }
+    Ok(())
+}
 
-    fn reference_gas_price(&self) -> u64 {
-        *self.reference_gas_price_receiver.borrow()
-    }
+fn reference_gas_price(&self) -> u64 {
+    *self.reference_gas_price_receiver.borrow()
+}
 
-    fn validate_sdk_version(&self, version_string: &str) -> Result<(), InternalError> {
-        let version = Version::parse(version_string).map_err(|_| InvalidSDKVersion)?;
-        if !self
-            .server
-            .options
-            .sdk_version_requirement
-            .matches(&version)
-        {
-            return Err(DeprecatedSDKVersion);
-        }
-        Ok(())
+fn validate_sdk_version(&self, version_string: &str) -> Result<(), InternalError> {
+    let version = Version::parse(version_string).map_err(|_| InvalidSDKVersion)?;
+    if !self
+        .server
+        .options
+        .sdk_version_requirement
+        .matches(&version)
+    {
+        return Err(DeprecatedSDKVersion);
     }
+    Ok(())
+}
 }
 
 /// Middleware to validate the SDK version.
 async fn handle_request_headers(
-    state: State<MyState>,
-    request: Request,
-    next: Next,
+state: State<MyState>,
+request: Request,
+next: Next,
 ) -> Result<Response, InternalError> {
-    // Log the request id and SDK version
-    let version = request.headers().get("Client-Sdk-Version");
+// Log the request id and SDK version
+let version = request.headers().get("Client-Sdk-Version");
 
-    info!(
-        "Request id: {:?}, SDK version: {:?}, SDK type: {:?}, Target API version: {:?}",
-        request
-            .headers()
-            .get("Request-Id")
-            .map(|v| v.to_str().unwrap_or_default()),
-        version,
-        request.headers().get("Client-Sdk-Type"),
-        request.headers().get("Client-Target-Api-Version")
-    );
+info!(
+    "Request id: {:?}, SDK version: {:?}, SDK type: {:?}, Target API version: {:?}",
+    request
+        .headers()
+        .get("Request-Id")
+        .map(|v| v.to_str().unwrap_or_default()),
+    version,
+    request.headers().get("Client-Sdk-Type"),
+    request.headers().get("Client-Target-Api-Version")
+);
 
-    version
-        .ok_or(MissingRequiredHeader("Client-Sdk-Version".to_string()))
-        .and_then(|v| v.to_str().map_err(|_| InvalidSDKVersion))
-        .and_then(|v| state.validate_sdk_version(v))
-        .tap_err(|e| {
-            debug!("Invalid SDK version: {:?}", e);
-            state.metrics.observe_error(e.as_str());
-        })?;
-    Ok(next.run(request).await)
+version
+    .ok_or(MissingRequiredHeader("Client-Sdk-Version".to_string()))
+    .and_then(|v| v.to_str().map_err(|_| InvalidSDKVersion))
+    .and_then(|v| state.validate_sdk_version(v))
+    .tap_err(|e| {
+        debug!("Invalid SDK version: {:?}", e);
+        state.metrics.observe_error(e.as_str());
+    })?;
+Ok(next.run(request).await)
 }
 
 /// Middleware to add headers to all responses.
 async fn add_response_headers(mut response: Response) -> Response {
-    let headers = response.headers_mut();
-    headers.insert(
-        "X-KeyServer-Version",
-        HeaderValue::from_static(package_version!()),
-    );
-    headers.insert(
-        "X-KeyServer-GitVersion",
-        HeaderValue::from_static(GIT_VERSION),
-    );
-    response
+let headers = response.headers_mut();
+headers.insert(
+    "X-KeyServer-Version",
+    HeaderValue::from_static(package_version!()),
+);
+headers.insert(
+    "X-KeyServer-GitVersion",
+    HeaderValue::from_static(GIT_VERSION),
+);
+response
 }
 
 /// Creates a [prometheus::core::Collector] that tracks the uptime of the server.
 fn uptime_metric(version: &str) -> Box<dyn prometheus::core::Collector> {
-    let opts = prometheus::opts!("uptime", "uptime of the key server in seconds")
-        .variable_label("version");
+let opts = prometheus::opts!("uptime", "uptime of the key server in seconds")
+    .variable_label("version");
 
-    let start_time = std::time::Instant::now();
-    let uptime = move || start_time.elapsed().as_secs();
-    let metric = prometheus_closure_metric::ClosureMetric::new(
-        opts,
-        prometheus_closure_metric::ValueType::Counter,
-        uptime,
-        &[version],
-    )
-    .unwrap();
+let start_time = std::time::Instant::now();
+let uptime = move || start_time.elapsed().as_secs();
+let metric = prometheus_closure_metric::ClosureMetric::new(
+    opts,
+    prometheus_closure_metric::ValueType::Counter,
+    uptime,
+    &[version],
+)
+.unwrap();
 
-    Box::new(metric)
+Box::new(metric)
 }
 
 /// Spawn server's background tasks:
@@ -704,196 +703,209 @@ fn uptime_metric(version: &str) -> Box<dyn prometheus::core::Collector> {
 ///
 /// The returned JoinHandle can be used to catch any tasks error or panic.
 async fn start_server_background_tasks(
-    server: Arc<Server>,
-    metrics: Arc<Metrics>,
-    registry: prometheus::Registry,
+server: Arc<Server>,
+metrics: Arc<Metrics>,
+registry: prometheus::Registry,
 ) -> (
-    Receiver<Timestamp>,
-    Receiver<u64>,
-    JoinHandle<anyhow::Result<()>>,
+Receiver<Timestamp>,
+Receiver<u64>,
+JoinHandle<anyhow::Result<()>>,
 ) {
-    // Spawn background checkpoint timestamp updater.
-    let (latest_checkpoint_timestamp_receiver, latest_checkpoint_timestamp_handle) = server
-        .spawn_latest_checkpoint_timestamp_updater(Some(&metrics))
-        .await;
+// Spawn background checkpoint timestamp updater.
+let (latest_checkpoint_timestamp_receiver, latest_checkpoint_timestamp_handle) = server
+    .spawn_latest_checkpoint_timestamp_updater(Some(&metrics))
+    .await;
 
-    // Spawn background reference gas price updater.
-    let (reference_gas_price_receiver, reference_gas_price_handle) = server
-        .spawn_reference_gas_price_updater(Some(&metrics))
-        .await;
+// Spawn background reference gas price updater.
+let (reference_gas_price_receiver, reference_gas_price_handle) = server
+    .spawn_reference_gas_price_updater(Some(&metrics))
+    .await;
 
-    // Spawn metrics push task
-    let metrics_push_handle = server.spawn_metrics_push_job(registry);
+// Spawn metrics push task
+let metrics_push_handle = server.spawn_metrics_push_job(registry);
 
-    // Spawn a monitor task that will exit the program if any updater task panics
-    let handle: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
-        tokio::select! {
-            result = latest_checkpoint_timestamp_handle => {
-                if let Err(e) = result {
-                    error!("Latest checkpoint timestamp updater panicked: {:?}", e);
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    }
-                    return Err(e.into());
+// Spawn a monitor task that will exit the program if any updater task panics
+let handle: JoinHandle<anyhow::Result<()>> = tokio::spawn(async move {
+    tokio::select! {
+        result = latest_checkpoint_timestamp_handle => {
+            if let Err(e) = result {
+                error!("Latest checkpoint timestamp updater panicked: {:?}", e);
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
                 }
-            }
-            result = reference_gas_price_handle => {
-                if let Err(e) = result {
-                    error!("Reference gas price updater panicked: {:?}", e);
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    }
-                    return Err(e.into());
-                }
-            }
-            result = metrics_push_handle => {
-                if let Err(e) = result {
-                    error!("Metrics push task panicked: {:?}", e);
-                    if e.is_panic() {
-                        std::panic::resume_unwind(e.into_panic());
-                    }
-                    return Err(e.into());
-                }
+                return Err(e.into());
             }
         }
+        result = reference_gas_price_handle => {
+            if let Err(e) = result {
+                error!("Reference gas price updater panicked: {:?}", e);
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                }
+                return Err(e.into());
+            }
+        }
+        result = metrics_push_handle => {
+            if let Err(e) = result {
+                error!("Metrics push task panicked: {:?}", e);
+                if e.is_panic() {
+                    std::panic::resume_unwind(e.into_panic());
+                }
+                return Err(e.into());
+            }
+        }
+    }
 
-        unreachable!("One of the background tasks should have returned an error");
-    });
+    unreachable!("One of the background tasks should have returned an error");
+});
 
-    (
-        latest_checkpoint_timestamp_receiver,
-        reference_gas_price_receiver,
-        handle,
-    )
+(
+    latest_checkpoint_timestamp_receiver,
+    reference_gas_price_receiver,
+    handle,
+)
+}
+
+pub async fn serve(app: Router, port: u16) -> Result<()> {
+debug!("listening on http://localhost:{}", port);
+
+let listener = tokio::net::TcpListener::bind(&format!("0.0.0.0:{}", port))
+    .await
+    .unwrap();
+
+axum::serve(listener, app).await?;
+
+Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _guard = mysten_service::logging::init();
-    let (monitor_handle, app) = app().await?;
+let _guard = mysten_service::logging::init();
+let (monitor_handle, app, port) = app().await?;
 
-    tokio::select! {
-        server_result = serve(app) => {
-            error!("Server stopped with status {:?}", server_result);
-            std::process::exit(1);
-        }
-        monitor_result = monitor_handle => {
-            error!("Background tasks stopped with error: {:?}", monitor_result);
-            std::process::exit(1);
-        }
+tokio::select! {
+    server_result = serve(app, port) => {
+        error!("Server stopped with status {:?}", server_result);
+        std::process::exit(1);
+    }
+    monitor_result = monitor_handle => {
+        error!("Background tasks stopped with error: {:?}", monitor_result);
+        std::process::exit(1);
     }
 }
+}
 
-pub(crate) async fn app() -> Result<(JoinHandle<Result<()>>, Router)> {
-    // If CONFIG_PATH is set, read the configuration from the file.
-    // Otherwise, use the local environment variables.
-    let options = match env::var("CONFIG_PATH") {
-        Ok(config_path) => {
-            info!("Loading config file: {}", config_path);
-            let mut opts: KeyServerOptions = serde_yaml::from_reader(
-                std::fs::File::open(&config_path)
-                    .context(format!("Cannot open configuration file {config_path}"))?,
-            )
-            .expect("Failed to parse configuration file");
+pub(crate) async fn app() -> Result<(JoinHandle<Result<()>>, Router, u16)> {
+// If CONFIG_PATH is set, read the configuration from the file.
+// Otherwise, use the local environment variables.
+let options = match env::var("CONFIG_PATH") {
+    Ok(config_path) => {
+        info!("Loading config file: {}", config_path);
+        let mut opts: KeyServerOptions = serde_yaml::from_reader(
+            std::fs::File::open(&config_path)
+                .context(format!("Cannot open configuration file {config_path}"))?,
+        )
+        .expect("Failed to parse configuration file");
 
-            // Handle Custom network NODE_URL configuration
-            if let Network::Custom {
-                ref mut node_url, ..
-            } = opts.network
-            {
-                let env_node_url = env::var("NODE_URL").ok();
+        // Handle Custom network NODE_URL configuration
+        if let Network::Custom {
+            ref mut node_url, ..
+        } = opts.network
+        {
+            let env_node_url = env::var("NODE_URL").ok();
 
-                match (node_url.as_ref(), env_node_url.as_ref()) {
-                    (Some(_), Some(_)) => {
-                        panic!("NODE_URL cannot be provided in both config file and environment variable. Please use only one source.");
-                    }
-                    (None, Some(url)) => {
-                        info!("Using NODE_URL from environment variable: {}", url);
-                        *node_url = Some(url.clone());
-                    }
-                    (Some(url), None) => {
-                        info!("Using NODE_URL from config file: {}", url);
-                    }
-                    (None, None) => {
-                        panic!("Custom network requires NODE_URL to be set either in config file or as environment variable");
-                    }
+            match (node_url.as_ref(), env_node_url.as_ref()) {
+                (Some(_), Some(_)) => {
+                    panic!("NODE_URL cannot be provided in both config file and environment variable. Please use only one source.");
+                }
+                (None, Some(url)) => {
+                    info!("Using NODE_URL from environment variable: {}", url);
+                    *node_url = Some(url.clone());
+                }
+                (Some(url), None) => {
+                    info!("Using NODE_URL from config file: {}", url);
+                }
+                (None, None) => {
+                    panic!("Custom network requires NODE_URL to be set either in config file or as environment variable");
                 }
             }
-
-            opts
         }
-        Err(_) => {
-            info!("Using local environment variables for configuration, should only be used for testing");
-            let network = env::var("NETWORK")
-                .map(|n| Network::from_str(&n))
-                .unwrap_or(Network::Testnet);
-            KeyServerOptions::new_open_server_with_default_values(
-                network,
-                utils::decode_object_id("KEY_SERVER_OBJECT_ID")?,
-            )
-        }
-    };
 
-    info!("Setting up metrics");
-    let registry = start_prometheus_server(SocketAddr::new(
-        IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
-        options.metrics_host_port,
-    ))
-    .default_registry();
-
-    // Tracks the uptime of the server.
-    let registry_clone = registry.clone();
-    tokio::task::spawn(async move {
-        registry_clone
-            .register(uptime_metric(
-                format!("{}-{}", package_version!(), GIT_VERSION).as_str(),
-            ))
-            .expect("metrics defined at compile time must be valid");
-    });
-
-    // hook up custom application metrics
-    let metrics = Arc::new(Metrics::new(&registry));
-
-    info!(
-        "Starting server, version {}",
-        format!("{}-{}", package_version!(), GIT_VERSION).as_str()
-    );
-    options.validate()?;
-    let server = Arc::new(Server::new(options, Some(metrics.clone())).await);
-
-    let (latest_checkpoint_timestamp_receiver, reference_gas_price_receiver, monitor_handle) =
-        start_server_background_tasks(server.clone(), metrics.clone(), registry.clone()).await;
-
-    let state = MyState {
-        metrics,
-        server,
-        latest_checkpoint_timestamp_receiver,
-        reference_gas_price_receiver,
-    };
-
-    let cors = CorsLayer::new()
-        .allow_methods(Any)
-        .allow_origin(Any)
-        .allow_headers(Any)
-        .expose_headers(Any);
-
-    let app = get_mysten_service::<MyState>(package_name!(), package_version!())
-        .merge(
-            axum::Router::new()
-                .route("/v1/fetch_key", post(handle_fetch_key))
-                .route("/v1/service", get(handle_get_service))
-                .layer(from_fn_with_state(state.clone(), handle_request_headers))
-                .layer(map_response(add_response_headers))
-                // Outside most middlewares that tracks metrics for HTTP requests and response
-                // status.
-                .layer(from_fn_with_state(
-                    state.metrics.clone(),
-                    metrics_middleware,
-                )),
+        opts
+    }
+    Err(_) => {
+        info!("Using local environment variables for configuration, should only be used for testing");
+        let network = env::var("NETWORK")
+            .map(|n| Network::from_str(&n))
+            .unwrap_or(Network::Testnet);
+        KeyServerOptions::new_open_server_with_default_values(
+            network,
+            utils::decode_object_id("KEY_SERVER_OBJECT_ID")?,
         )
-        .with_state(state)
-        // Global body size limit
-        .layer(RequestBodyLimitLayer::new(MAX_REQUEST_SIZE))
-        .layer(cors);
-    Ok((monitor_handle, app))
+    }
+};
+
+info!("Setting up metrics");
+let registry = start_prometheus_server(SocketAddr::new(
+    IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
+    options.metrics_host_port,
+))
+.default_registry();
+
+// Tracks the uptime of the server.
+let registry_clone = registry.clone();
+tokio::task::spawn(async move {
+    registry_clone
+        .register(uptime_metric(
+            format!("{}-{}", package_version!(), GIT_VERSION).as_str(),
+        ))
+        .expect("metrics defined at compile time must be valid");
+});
+
+// hook up custom application metrics
+let metrics = Arc::new(Metrics::new(&registry));
+
+info!(
+    "Starting server, version {}",
+    format!("{}-{}", package_version!(), GIT_VERSION).as_str()
+);
+options.validate()?;
+let port = options.port;
+let server = Arc::new(Server::new(options, Some(metrics.clone())).await);
+
+let (latest_checkpoint_timestamp_receiver, reference_gas_price_receiver, monitor_handle) =
+    start_server_background_tasks(server.clone(), metrics.clone(), registry.clone()).await;
+
+let state = MyState {
+    metrics,
+    server,
+    latest_checkpoint_timestamp_receiver,
+    reference_gas_price_receiver,
+};
+
+let cors = CorsLayer::new()
+    .allow_methods(Any)
+    .allow_origin(Any)
+    .allow_headers(Any)
+    .expose_headers(Any);
+
+let app = get_mysten_service::<MyState>(package_name!(), package_version!())
+    .merge(
+        axum::Router::new()
+            .route("/v1/fetch_key", post(handle_fetch_key))
+            .route("/v1/service", get(handle_get_service))
+            .layer(from_fn_with_state(state.clone(), handle_request_headers))
+            .layer(map_response(add_response_headers))
+            // Outside most middlewares that tracks metrics for HTTP requests and response
+            // status.
+            .layer(from_fn_with_state(
+                state.metrics.clone(),
+                metrics_middleware,
+            )),
+    )
+    .with_state(state)
+    // Global body size limit
+    .layer(RequestBodyLimitLayer::new(MAX_REQUEST_SIZE))
+    .layer(cors);
+Ok((monitor_handle, app, port))
 }

@@ -144,9 +144,6 @@ async fn test_server_background_task_monitor() {
 
 #[tokio::test]
 async fn test_service() {
-    let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
     let key_server_object_id = ObjectID::random().to_hex_uncompressed();
     let vars = vec![
         ("KEY_SERVER_OBJECT_ID", Some(key_server_object_id.as_str())),
@@ -156,7 +153,10 @@ async fn test_service() {
         ),
     ];
     temp_env::async_with_vars(vars, async {
-        let (_, app) = app().await.unwrap();
+        let (_, app, port) = app().await.unwrap();
+
+        let listener = TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap();
+        let addr = listener.local_addr().unwrap();
 
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
@@ -259,9 +259,6 @@ async fn test_fetch_key() {
             .unwrap();
 
     // Setup key server
-    let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
     let key_server_object_id = ObjectID::random();
 
     let mut rng = thread_rng();
@@ -318,7 +315,10 @@ async fn test_fetch_key() {
 
     // Run test
     temp_env::async_with_vars(vars, async {
-        let (_, app) = app().await.unwrap();
+        let (_, app, port) = app().await.unwrap();
+
+        let listener = TcpListener::bind(&format!("0.0.0.0:{port}")).await.unwrap();
+        let addr = listener.local_addr().unwrap();
 
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();

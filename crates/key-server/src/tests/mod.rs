@@ -15,6 +15,7 @@ use fastcrypto::ed25519::Ed25519KeyPair;
 use fastcrypto::encoding::Encoding;
 use fastcrypto::serde_helpers::ToFromByteArray;
 use futures::future::join_all;
+use mysten_service::DEFAULT_PORT;
 use rand::thread_rng;
 use semver::VersionReq;
 use serde_json::json;
@@ -116,7 +117,7 @@ impl SealTestCluster {
                 let server = Server {
                     sui_rpc_client: SuiRpcClient::new(
                         self.cluster.sui_client().clone(),
-                        RetryConfig::default(),
+                         RetryConfig::default(),
                         None,
                     ),
                     master_keys: MasterKeys::Open { master_key },
@@ -134,6 +135,7 @@ impl SealTestCluster {
                         session_key_ttl_max: from_mins(30),
                         rpc_config: RpcConfig::default(),
                         metrics_push_config: None,
+                        port: DEFAULT_PORT
                     },
                 };
                 self.servers.push((key_server_object_id, server));

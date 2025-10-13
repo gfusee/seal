@@ -22,6 +22,7 @@ use crypto::{
 use fastcrypto::encoding::Encoding;
 use fastcrypto::serde_helpers::ToFromByteArray;
 use futures::future::join_all;
+use mysten_service::DEFAULT_PORT;
 use rand::thread_rng;
 use seal_sdk::types::{DecryptionKey, FetchKeyResponse};
 use seal_sdk::{genkey, seal_decrypt_all_objects};
@@ -511,7 +512,7 @@ async fn create_server(
     client_configs: Vec<ClientConfig>,
     vars: impl AsRef<[(&str, &[u8])]>,
 ) -> Server {
-    let options = KeyServerOptions {
+   let options = KeyServerOptions {
         network: Network::TestCluster,
         server_mode: ServerMode::Permissioned { client_configs },
         metrics_host_port: 0,
@@ -522,6 +523,7 @@ async fn create_server(
         session_key_ttl_max: from_mins(30),
         rpc_config: RpcConfig::default(),
         metrics_push_config: None,
+        port: DEFAULT_PORT
     };
 
     let vars = vars

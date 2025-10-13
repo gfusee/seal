@@ -6,6 +6,7 @@ use crate::time::from_mins;
 use crate::types::Network;
 use anyhow::{anyhow, Result};
 use duration_str::deserialize_duration;
+use mysten_service::DEFAULT_PORT;
 use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -143,6 +144,9 @@ pub struct KeyServerOptions {
     /// Optional configuration for pushing metrics to an external endpoint (e.g., seal-proxy).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics_push_config: Option<MetricsPushConfig>,
+
+    #[serde(default = "default_server_port")]
+    pub port: u16,
 }
 
 impl KeyServerOptions {
@@ -163,6 +167,7 @@ impl KeyServerOptions {
             session_key_ttl_max: default_session_key_ttl_max(),
             rpc_config: RpcConfig::default(),
             metrics_push_config: None,
+            port: DEFAULT_PORT
         }
     }
 
@@ -181,6 +186,7 @@ impl KeyServerOptions {
             session_key_ttl_max: default_session_key_ttl_max(),
             rpc_config: RpcConfig::default(),
             metrics_push_config: None,
+            port: DEFAULT_PORT
         }
     }
 
@@ -297,6 +303,10 @@ fn default_metrics_host_port() -> u16 {
     9184
 }
 
+fn default_server_port() -> u16 {
+    DEFAULT_PORT
+}
+
 fn default_sdk_version_requirement() -> VersionReq {
     VersionReq::parse(">=0.4.5").expect("Failed to parse default SDK version requirement")
 }
@@ -322,6 +332,7 @@ session_key_ttl_max: '60s'
     assert_eq!(options.network, Network::Mainnet);
     assert_eq!(options.sdk_version_requirement.to_string(), ">=0.2.7");
     assert_eq!(options.metrics_host_port, 1234);
+    assert_eq!(options.port, 2024);
 
     let expected_server_mode = ServerMode::Open {
         key_server_object_id: ObjectID::from_str(
@@ -351,6 +362,24 @@ server_mode: !Open
             use_default_mainnet_for_mvr: Some(false),
         }
     );
+
+    let valid_configuration_custom_port = r#"
+network: Mainnet
+sdk_version_requirement: '>=0.2.7'
+metrics_host_port: 1234
+server_mode: !Open
+  key_server_object_id: '0x0000000000000000000000000000000000000000000000000000000000000002'
+checkpoint_update_interval: '13s'
+rgp_update_interval: '5s'
+allowed_staleness: '2s'
+session_key_ttl_max: '60s'
+port: 9999
+"#;
+    
+    let options: KeyServerOptions = serde_yaml::from_str(valid_configuration_custom_port)
+        .expect("Failed to parse valid configuration");
+
+    assert_eq!(options.port, 9999);
 
     let unknown_option = "a_complete_unknown: 'a rolling stone'\n";
     assert!(serde_yaml::from_str::<KeyServerOptions>(unknown_option).is_err());

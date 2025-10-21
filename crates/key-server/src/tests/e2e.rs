@@ -241,7 +241,7 @@ async fn test_e2e_decrypt_all_objects_one_key_missing_threshold_ok() {
         cap,
         user_address,
     )
-        .await;
+    .await;
 
     let services = tc.get_services();
     let services_ids = services
@@ -268,8 +268,8 @@ async fn test_e2e_decrypt_all_objects_one_key_missing_threshold_ok() {
             aad: None,
         },
     )
-        .unwrap()
-        .0;
+    .unwrap()
+    .0;
 
     let encryption2 = seal_encrypt(
         NewObjectID::new(examples_package_id.into_bytes()),
@@ -282,8 +282,8 @@ async fn test_e2e_decrypt_all_objects_one_key_missing_threshold_ok() {
             aad: None,
         },
     )
-        .unwrap()
-        .0;
+    .unwrap()
+    .0;
 
     let eg_keys = genkey::<UserSecretKey, crypto::ibe::PublicKey, _>(&mut thread_rng());
     let (eg_sk, eg_pk, _) = eg_keys;
@@ -356,7 +356,7 @@ async fn test_e2e_decrypt_all_objects_two_key_missing_threshold_not_ok() {
         cap,
         user_address,
     )
-        .await;
+    .await;
 
     let services = tc.get_services();
     let services_ids = services
@@ -383,8 +383,8 @@ async fn test_e2e_decrypt_all_objects_two_key_missing_threshold_not_ok() {
             aad: None,
         },
     )
-        .unwrap()
-        .0;
+    .unwrap()
+    .0;
 
     let encryption2 = seal_encrypt(
         NewObjectID::new(examples_package_id.into_bytes()),
@@ -397,8 +397,8 @@ async fn test_e2e_decrypt_all_objects_two_key_missing_threshold_not_ok() {
             aad: None,
         },
     )
-        .unwrap()
-        .0;
+    .unwrap()
+    .0;
 
     let eg_keys = genkey::<UserSecretKey, crypto::ibe::PublicKey, _>(&mut thread_rng());
     let (eg_sk, eg_pk, _) = eg_keys;

@@ -174,8 +174,7 @@ Seal evaluates the transaction as if the user sent it. In Move, `TxContext::send
 !!! tip
     To debug a transaction, call `dryRunTransactionBlock` directly with the transaction block.
 
-The `SealClient` caches keys retrieved from Seal key servers to optimize performance during subsequent decryptions, especially when the same id is used across multiple encryptions.
-Reusing the same client instance helps reduce backend calls and improve latency.
+The `SealClient` caches keys retrieved from Seal key servers to optimize performance during subsequent decryptions, especially when the same id is used across multiple encryptions. Reusing the same client instance helps reduce backend calls and improve latency. Refer to overall [Performance Recommendations](#optimizing-performance).
 
 To retrieve multiple keys more efficiently, use the `fetchKeys` function with a multi-command PTB. This approach is recommended when multiple keys are required, as it reduces the number of requests to the key servers. Because key servers may apply rate limiting, developers should design their applications and access policies to minimize the frequency of key retrieval requests.
 
@@ -314,3 +313,22 @@ To reduce latency and improve efficiency when using the Seal SDK, apply the foll
 - **Include fully specified objects in PTBs**:  When creating programmable transaction blocks, pass complete object references (with versions). This reduces object resolution calls by a key server to the Sui Full node.
 - **Avoid unnecessary key retrievals**: Reuse existing encrypted keys whenever possible and rely on the SDK’s internal caching to reduce overhead.
 - **[Advanced] Use `fetchKeys()` for batch decryption**: Call `fetchKeys()` when retrieving multiple decryption keys. This groups requests and minimizes interactions with key servers.
+
+### Other performance recommendations
+
+**Choose AES for speed, and reserve HMAC-CTR for on-chain decryptions**
+
+Use `AES` for most app data. It is significantly faster and more memory-efficient than `HMAC-CTR`. Use `HMAC_CTR` **only** when you need on-chain decryption of small-sized data.
+
+**Use envelope (layered) encryption for large payloads**
+
+For big files (videos, large datasets etc.), treat Seal as a **KMS**:
+
+- Generate a symmetric key and encrypt the data with `AES`.
+- Encrypt the symmetric key using Seal.
+- Store the ciphertext (e.g., on Walrus) and keep a reference to the Seal-encrypted symmetric key.
+
+!!! tip
+    Hardware, runtime (browser vs. Node.js), and object size vary. Try both direct `AES` and envelope encryption to find the best balance of performance, scalability, and manageability for your workload.
+
+Envelope encryption is also recommended for highly sensitive data and enables safer key rotation/updates without re-encrypting large blobs. See [Use layered encryption for critical or large data](./SecurityBestPractices.md#use-layered-encryption-for-critical-or-large-data).

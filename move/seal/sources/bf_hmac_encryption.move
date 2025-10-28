@@ -134,10 +134,14 @@ public fun decrypt(
     assert!(given_indices.length() >= *threshold as u64, EInsufficientDerivedKeys);
 
     // Decrypt shares.
+    let gid = hash_to_g1_with_dst(
+        &create_full_id(encrypted_object.package_id, encrypted_object.id),
+    );
     let decrypted_shares = decrypt_shares_with_derived_keys(
         &indices_per_vdk,
         verified_derived_keys,
         encrypted_object,
+        &gid,
     );
 
     // Interpolate polynomials from the decrypted shares.
@@ -163,17 +167,30 @@ public fun decrypt(
         return none()
     };
 
-    // Now, all shares can be decrypted using the randomness and the public keys.
-    let all_shares = decrypt_all_shares_with_randomness(
+    // Get the vector indices of the remaining shares.
+    let mut remaining_indices = vector::empty();
+    indices.length().do!(|i| {
+        if (!given_indices.contains(&i)) {
+            remaining_indices.push_back(i);
+        }
+    });
+
+    // Now, the remaining shares can be decrypted using the randomness and the public keys.
+    let remaining_shares = decrypt_remaining_shares_with_randomness(
         &randomness,
         encrypted_object,
-        &public_keys_indices.map_ref!(|i| public_keys[*i].pk),
+        &remaining_indices,
+        &remaining_indices.map_ref!(|i| public_keys[public_keys_indices[*i]].pk),
+        &gid,
     );
 
     // Verify the consistency of the shares, eg. that they are all consistent with the polynomial interpolated from the shares decrypted from the given keys.
     if (
-        all_shares
-            .zip_map_ref!(indices, |share, index| verify_share(&polynomials, share, *index))
+        remaining_shares
+            .zip_map_ref!(
+                &remaining_indices,
+                |share, i| verify_share(&polynomials, share, indices[*i]),
+            )
             .any!(|verified| !*verified)
     ) {
         return none()
@@ -235,10 +252,8 @@ fun decrypt_shares_with_derived_keys(
     indices_per_vdk: &vector<vector<u64>>,
     derived_keys: &vector<VerifiedDerivedKey>,
     encrypted_object: &EncryptedObject,
+    gid: &Element<G1>,
 ): vector<vector<u8>> {
-    let gid = hash_to_g1_with_dst(
-        &create_full_id(encrypted_object.package_id, encrypted_object.id),
-    );
     indices_per_vdk.zip_map_ref!(derived_keys, |indices, vdk| {
         indices.map_ref!(|i| {
             xor(
@@ -246,7 +261,7 @@ fun decrypt_shares_with_derived_keys(
                 &kdf(
                     &pairing(&vdk.derived_key, &encrypted_object.nonce),
                     &encrypted_object.nonce,
-                    &gid,
+                    gid,
                     encrypted_object.services[*i],
                     encrypted_object.indices[*i],
                 ),
@@ -256,26 +271,24 @@ fun decrypt_shares_with_derived_keys(
 }
 
 /// Decrypts shares with the given randomness.
-fun decrypt_all_shares_with_randomness(
+fun decrypt_remaining_shares_with_randomness(
     randomness: &Element<Scalar>,
     encrypted_object: &EncryptedObject,
+    remaining_indices: &vector<u64>,
     public_keys: &vector<Element<G2>>,
+    gid: &Element<G1>,
 ): (vector<vector<u8>>) {
-    let n = encrypted_object.indices.length();
-    assert!(n == public_keys.length(), EIncompatibleInputLengths);
-    let gid = hash_to_g1_with_dst(
-        &create_full_id(encrypted_object.package_id, encrypted_object.id),
-    );
-    let gid_r = g1_mul(randomness, &gid);
-    vector::tabulate!(n, |i| {
+    assert!(remaining_indices.length() == public_keys.length(), EIncompatibleInputLengths);
+    let gid_r = g1_mul(randomness, gid);
+    remaining_indices.zip_map_ref!(public_keys, |i, pk| {
         xor(
-            &encrypted_object.encrypted_shares[i],
+            &encrypted_object.encrypted_shares[*i],
             &kdf(
-                &pairing(&gid_r, &public_keys[i]),
+                &pairing(&gid_r, pk),
                 &encrypted_object.nonce,
-                &gid,
-                encrypted_object.services[i],
-                encrypted_object.indices[i],
+                gid,
+                encrypted_object.services[*i],
+                encrypted_object.indices[*i],
             ),
         )
     })

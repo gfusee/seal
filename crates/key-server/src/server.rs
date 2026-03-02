@@ -9,7 +9,6 @@ use crate::metrics_push::create_push_client;
 use crate::mvr::mvr_forward_resolution;
 use crate::periodic_updater::spawn_periodic_updater;
 use crate::signed_message::signed_request;
-use crate::sui_rpc_client::RpcError;
 use crate::time::{checked_duration_since, from_mins};
 use crate::types::{MasterKeyPOP, Network};
 use crate::InternalError::DeprecatedSDKVersion;
@@ -56,7 +55,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use sui_rpc::client::Client as SuiGrpcClient;
-use sui_rpc_client::SuiRpcClient;
+use sui_rpc_client::{RpcError, SuiRpcClient};
 use sui_sdk::error::Error;
 use sui_sdk::rpc_types::{SuiExecutionStatus, SuiTransactionBlockEffectsAPI};
 use sui_sdk::types::base_types::{ObjectID, SuiAddress};
@@ -136,7 +135,7 @@ struct FetchKeyRequest {
 #[derive(Clone)]
 struct Server {
     sui_rpc_client: SuiRpcClient,
-    master_keys: MasterKeys,
+    master_keys: Arc<MasterKeys>,
     key_server_oid_to_pop: Arc<RwLock<HashMap<ObjectID, MasterKeyPOP>>>,
     options: KeyServerOptions,
 }
@@ -217,7 +216,7 @@ impl Server {
 
         Server {
             sui_rpc_client,
-            master_keys,
+            master_keys: Arc::new(master_keys),
             key_server_oid_to_pop: Arc::new(RwLock::new(key_server_oid_to_pop)),
             options,
         }
@@ -519,8 +518,6 @@ impl Server {
             self.options.rgp_update_interval,
             get_reference_gas_price,
             "RGP",
-            None::<fn(u64)>,
-            None::<fn(Duration)>,
             metrics.map(|m| status_callback(&m.get_reference_gas_price_status)),
         )
         .await
@@ -569,33 +566,26 @@ impl Server {
 
     /// Spawns a background task that fetches committee key server version from onchain and updates
     /// the committee version in MasterKeys::Committee. Only spawns a task if in Committee mode
-    /// during rotation and current version is 1 behind target version.
+    /// during rotation and current version is 1 behind target version, and the task is stopped once
+    /// the version is updated.
     async fn spawn_committee_version_updater(&self) {
         // Load committee state from config.
         let ServerMode::Committee {
             member_address: _,
             key_server_obj_id,
-            committee_state,
+            committee_state: CommitteeState::Rotation { target_version },
             server_name: _,
         } = &self.options.server_mode
         else {
             return;
         };
-
-        // Check if we're in rotation mode.
-        let target_version = match committee_state {
-            CommitteeState::Active => {
-                info!("Active mode: no rotation needed. Do not start version monitor.");
-                return;
-            }
-            CommitteeState::Rotation { target_version } => *target_version,
-        };
+        let target_version = *target_version;
 
         // Load current version from MasterKeys. This is initialized during MasterKeys::load().
-        let current_version = match &self.master_keys {
+        let current_version = match self.master_keys.as_ref() {
             MasterKeys::Committee {
                 committee_version, ..
-            } => committee_version.load(Ordering::Relaxed),
+            } => committee_version.load(Ordering::SeqCst),
             _ => return,
         };
 
@@ -609,7 +599,7 @@ impl Server {
         );
 
         // Clone the committee_version Arc for the spawned task
-        let committee_version_arc = match &self.master_keys {
+        let committee_version_arc = match self.master_keys.as_ref() {
             MasterKeys::Committee {
                 committee_version, ..
             } => Arc::clone(committee_version),
@@ -633,8 +623,6 @@ impl Server {
                 Duration::from_secs(30),
                 fetch_fn,
                 "committee key server version",
-                None::<fn(u64)>,
-                None::<fn(Duration)>,
                 None::<fn(bool)>,
             )
             .await;
@@ -646,7 +634,7 @@ impl Server {
                 loop {
                     match receiver_clone.changed().await {
                         Ok(_) => {
-                            // TODO: Make the updater generic from u64 to avoid this cast.
+                            // Safe cast: onchain Committee.version is u32, so value always fits.
                             let version = *receiver_clone.borrow() as u32;
 
                             // Rotation completes.
@@ -654,18 +642,18 @@ impl Server {
                                 info!("Rotation complete at version {version}. Updating committee version.");
 
                                 // Update the committee version
-                                committee_version_arc.store(target_version, Ordering::Relaxed);
+                                committee_version_arc.store(target_version, Ordering::SeqCst);
                                 info!("Committee version refreshed to {target_version}.");
 
                                 updater_handle.abort();
                                 break;
-                            } else if target_version == version + 1 {
+                            } else if version.checked_add(1) == Some(target_version) {
                                 continue; // Still in rotation, keep monitoring.
                             } else {
                                 // Unexpected version state - onchain version skipped or went backwards.
                                 panic!(
                                     "CRITICAL: Unexpected onchain version {version} (expected {target_version} or {})",
-                                    target_version - 1
+                                    target_version.saturating_sub(1)
                                 );
                             }
                         }

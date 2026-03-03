@@ -10,13 +10,13 @@ use crate::mvr::mvr_forward_resolution;
 use crate::periodic_updater::spawn_periodic_updater;
 use crate::signed_message::signed_request;
 use crate::time::{checked_duration_since, from_mins};
-use crate::types::{MasterKeyPOP, Network};
+use crate::types::{IbePublicKey, MasterKeyPOP, Network};
 use crate::InternalError::DeprecatedSDKVersion;
 use anyhow::{Context, Result};
 use axum::extract::{Query, Request};
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::{from_fn_with_state, map_response, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{extract::State, Json, Router};
 use common::{ClientSdkType, HEADER_CLIENT_SDK_TYPE, HEADER_CLIENT_SDK_VERSION};
@@ -141,6 +141,11 @@ struct Server {
 }
 
 impl Server {
+    /// Check if the server is in committee mode.
+    fn is_committee_mode(&self) -> bool {
+        matches!(self.options.server_mode, ServerMode::Committee { .. })
+    }
+
     /// Helper to extract committee server parameters for metrics and other uses.
     /// Returns (key_server_object_id, server_name).
     /// Returns None if not in committee mode.
@@ -768,6 +773,28 @@ async fn handle_get_service(
     Ok(Json(GetServiceResponse { service_id, pop }))
 }
 
+#[derive(Serialize, Deserialize)]
+struct GetCommitteePartialPkResponse {
+    partial_pk: IbePublicKey,
+}
+
+/// Return the corresponding partial public key for its master share. Debug endpoint only supported
+/// in Committee mode.
+async fn handle_get_committee_server_partial_pk(State(app_state): State<MyState>) -> Response {
+    app_state.metrics.service_requests.inc();
+
+    if !app_state.server.is_committee_mode() {
+        return (StatusCode::BAD_REQUEST, "Unsupported").into_response();
+    }
+
+    let partial_pk = match app_state.server.master_keys.get_committee_partial_pk() {
+        Ok(pk) => pk,
+        Err(e) => return e.into_response(),
+    };
+
+    Json(GetCommitteePartialPkResponse { partial_pk }).into_response()
+}
+
 #[derive(Clone)]
 struct MyState {
     metrics: Arc<KeyServerMetrics>,
@@ -1025,6 +1052,10 @@ pub(crate) async fn app() -> Result<(JoinHandle<Result<()>>, Router)> {
             axum::Router::new()
                 .route("/v1/fetch_key", post(handle_fetch_key))
                 .route("/v1/service", get(handle_get_service))
+                .route(
+                    "/v1/debug/committee_partial_pk",
+                    get(handle_get_committee_server_partial_pk),
+                )
                 .layer(from_fn_with_state(state.clone(), handle_request_headers))
                 .layer(map_response(|response| {
                     add_response_headers(response, package_version!(), GIT_VERSION)

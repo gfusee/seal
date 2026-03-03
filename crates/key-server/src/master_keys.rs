@@ -242,6 +242,11 @@ impl MasterKeys {
         }
     }
 
+    pub(crate) fn get_committee_partial_pk(&self) -> anyhow::Result<ibe::PublicKey, InternalError> {
+        let master_key = self.get_committee_server_master_share()?;
+        Ok(ibe::public_key_from_master_key(master_key))
+    }
+
     /// Load committee version and return the master share to use and return. Called in committee
     /// mode only.
     pub(crate) fn get_committee_server_master_share(
@@ -282,7 +287,7 @@ impl MasterKeys {
                     }
                 }
             },
-            _ => panic!("get_committee_server_master_share called on non-Committee mode"),
+            _ => Err(InternalError::Failure("Invalid server type".to_string())),
         }
     }
 }
